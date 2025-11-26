@@ -42,13 +42,13 @@ export const CURRENCIES: { value: Currency; label: string; symbol: string }[] = 
 ]
 
 // Default Unit Prices (in USD, can be converted based on selected currency)
-// Growth: $49/mo = $588/year, Pro: $99/mo = $1,188/year
+// Growth: $50/mo = $600/year, Pro: $98.75/mo = $1,185/year, Enterprise: $138.75/mo = $1,665/year
 export const DEFAULT_UNIT_PRICES: Record<Plan, number> = {
-  'Growth': 588,
-  'Pro': 1188,
-  'Enterprise': 2376,
-  'Growth to Pro': 588,
-  'Pro to Enterprise': 1188,
+  'Growth': 600,
+  'Pro': 1185,
+  'Enterprise': 1665,
+  'Growth to Pro': 600,
+  'Pro to Enterprise': 1185,
 }
 
 // Default Implementation Prices
