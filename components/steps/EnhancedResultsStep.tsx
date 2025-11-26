@@ -28,11 +28,8 @@ export default function EnhancedResultsStep() {
     analysisResults: {
       roi: 0,
       paybackPeriod: 0,
-      npv: 0,
-      irr: 0,
       totalBenefits3yr: 0,
       totalCosts3yr: 0,
-      totalNetCashFlow3yr: 0,
     },
     discountRate: advancedConfig?.discountRate || 10,
     benefitRealizationFactors: advancedConfig?.benefitRealizationFactors || {

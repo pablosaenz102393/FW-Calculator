@@ -787,17 +787,17 @@ export default function CalculationTrace({
                         <div className="ml-4 space-y-0.5 text-xs">
                           {impact.maturityDefaults.low !== undefined && (
                             <div className="text-gray-400">
-                              Low ({impact.maturityDefaults.low}%) - Would yield different benefit
+                              Low ({impact.maturityDefaults.low.percentEliminated ?? impact.maturityDefaults.low.timeSavedMinutes ?? '—'}{impact.maturityDefaults.low.percentEliminated !== undefined ? '%' : ' mins'}) - Would yield different benefit
                             </div>
                           )}
                           {impact.maturityDefaults.medium !== undefined && (
                             <div className="text-gray-400">
-                              Medium ({impact.maturityDefaults.medium}%) - Would yield different benefit
+                              Medium ({impact.maturityDefaults.medium.percentEliminated ?? impact.maturityDefaults.medium.timeSavedMinutes ?? '—'}{impact.maturityDefaults.medium.percentEliminated !== undefined ? '%' : ' mins'}) - Would yield different benefit
                             </div>
                           )}
                           {impact.maturityDefaults.high !== undefined && (
                             <div className="text-gray-400">
-                              High ({impact.maturityDefaults.high}%) - Would yield different benefit
+                              High ({impact.maturityDefaults.high.percentEliminated ?? impact.maturityDefaults.high.timeSavedMinutes ?? '—'}{impact.maturityDefaults.high.percentEliminated !== undefined ? '%' : ' mins'}) - Would yield different benefit
                             </div>
                           )}
                           {impact.otherRange && (
@@ -969,12 +969,12 @@ export default function CalculationTrace({
               </div>
               <div>
                 <span className="text-gray-400">Total Net Cash Flow:</span>{' '}
-                <span className="text-white">{fc(analysisResults.totalNetCashFlow3yr)}</span>
+                <span className="text-white">{fc(analysisResults.totalBenefits3yr - analysisResults.totalCosts3yr)}</span>
               </div>
               <div className="mt-1">
                 <span className="text-green-300">Calculation:</span>{' '}
                 <span className="text-white">
-                  ({fc(analysisResults.totalNetCashFlow3yr)} ÷ {fc(analysisResults.totalCosts3yr)}) × 100
+                  ({fc(analysisResults.totalBenefits3yr - analysisResults.totalCosts3yr)} ÷ {fc(analysisResults.totalCosts3yr)}) × 100
                 </span>
               </div>
               <div className="mt-1">
@@ -1031,7 +1031,7 @@ export default function CalculationTrace({
               <div>
                 <span className="text-gray-400">Total Net Cash Flow:</span>{' '}
                 <span className="text-cyan-300 font-bold">
-                  {fc(analysisResults.totalNetCashFlow3yr)}
+                  {fc(analysisResults.totalBenefits3yr - analysisResults.totalCosts3yr)}
                 </span>
               </div>
               <div className="mt-2 pt-2 border-t border-gray-600">

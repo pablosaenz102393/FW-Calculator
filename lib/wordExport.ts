@@ -193,17 +193,6 @@ function createDashboardMetrics(results: ResultsData, currencySymbol: string): P
     }),
     new Paragraph({
       children: [
-        new TextRun({ text: 'Net Present Value: ', bold: true }),
-        new TextRun({
-          text: `${currencySymbol}${analysisResults.npv.toLocaleString('en-US', {
-            minimumFractionDigits: 0,
-            maximumFractionDigits: 0,
-          })}`,
-        }),
-      ],
-    }),
-    new Paragraph({
-      children: [
         new TextRun({ text: 'Total Benefits (3-Year): ', bold: true }),
         new TextRun({
           text: `${currencySymbol}${analysisResults.totalBenefits3yr.toLocaleString(

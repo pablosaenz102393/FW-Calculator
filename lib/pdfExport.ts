@@ -146,12 +146,6 @@ function addDashboardMetrics(
 
   yPosition += 7
   doc.setFont('helvetica', 'bold')
-  doc.text('Net Present Value: ', 20, yPosition)
-  doc.setFont('helvetica', 'normal')
-  doc.text(formatCurrency(analysisResults.npv, currencySymbol), 70, yPosition)
-
-  yPosition += 7
-  doc.setFont('helvetica', 'bold')
   doc.text('Total Benefits (3-Year): ', 20, yPosition)
   doc.setFont('helvetica', 'normal')
   doc.text(formatCurrency(analysisResults.totalBenefits3yr, currencySymbol), 70, yPosition)
@@ -320,7 +314,7 @@ function addYearlyBreakdown(
  * Add footer
  */
 function addFooter(doc: jsPDF): void {
-  const pageCount = doc.getNumberOfPages()
+  const pageCount = doc.internal.getNumberOfPages()
 
   for (let i = 1; i <= pageCount; i++) {
     doc.setPage(i)
