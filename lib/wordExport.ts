@@ -129,7 +129,7 @@ function createHeaderSection(
 ): Paragraph[] {
   return [
     new Paragraph({
-      text: 'Freshservice Self-Service ROI Calculator',
+      text: 'Freshworks Self-Service ROI Calculator',
       heading: HeadingLevel.TITLE,
       alignment: AlignmentType.CENTER,
     }),

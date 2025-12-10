@@ -124,7 +124,7 @@ export default function ResultsStep() {
         </head>
         <body>
           <div class="header">
-            <h1>Freshservice Self-Service ROI Calculator</h1>
+            <h1>Freshworks Self-Service ROI Calculator</h1>
             <p>Return on Investment Analysis Report</p>
             <p style="font-size: 14px; margin-top: 10px;">
               Generated on ${new Date().toLocaleDateString()}
@@ -183,7 +183,7 @@ export default function ResultsStep() {
           </div>
 
           <div class="footer">
-            <p><strong>Freshservice Self-Service ROI Calculator</strong></p>
+            <p><strong>Freshworks Self-Service ROI Calculator</strong></p>
             <p>This report is generated for informational purposes only.</p>
             <p>Actual results may vary based on specific implementation and usage patterns.</p>
           </div>

@@ -5,7 +5,7 @@ import './globals.css'
 const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
-  title: 'Freshservice Self-Service ROI Calculator',
+  title: 'Freshworks Self-Service ROI Calculator',
   description: 'Calculate your ROI with Freshservice',
 }
 
