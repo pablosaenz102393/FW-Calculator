@@ -66,7 +66,7 @@ function addHeaderSection(
   // Title
   doc.setFontSize(20)
   doc.setFont('helvetica', 'bold')
-  doc.text('Freshservice Self-Service ROI Calculator', 105, yPosition, { align: 'center' })
+  doc.text('Freshworks Self-Service ROI Calculator', 105, yPosition, { align: 'center' })
 
   yPosition += 10
   doc.setFontSize(14)

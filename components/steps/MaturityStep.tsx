@@ -11,7 +11,7 @@ import { calculateROIResults } from '@/lib/calculationEngine'
 import { getVisibleComponents } from '@/lib/controlPanel'
 
 export default function MaturityStep() {
-  const { state, updateMaturity, updateResults, nextStep, previousStep } = useWizard()
+  const { state, updateMaturity, updateComponentData, updateResults, nextStep, previousStep } = useWizard()
   const { opportunity, agentData, pricing } = state
 
   const availableAreas = useMemo(
@@ -65,7 +65,7 @@ export default function MaturityStep() {
       [areaName]: {
         ...prev[areaName],
         level: 'Other',
-        customPercentage: numValue,
+        customPercentage: isNaN(numValue) ? 0 : numValue,
       },
     }))
   }
@@ -77,7 +77,7 @@ export default function MaturityStep() {
       [areaName]: {
         ...prev[areaName],
         level: 'Other',
-        customTimeSaved: numValue,
+        customTimeSaved: isNaN(numValue) ? 0 : numValue,
       },
     }))
   }
@@ -180,14 +180,16 @@ export default function MaturityStep() {
 
       visibleComponents.forEach((component) => {
         const maturityArea = maturityData[component.id]
-        if (!maturityArea) return
 
-        // Get the percentage for this maturity level
+        // Get the percentage for this maturity level (if maturity area exists)
         const maturityValue = maturityValues[component.id]
         let percentage = 0
 
-        if (maturityValue?.level === 'Other' && maturityValue.customPercentage !== undefined) {
+        if (maturityValue?.level === 'Other' && maturityValue.customPercentage !== undefined && !isNaN(maturityValue.customPercentage)) {
           percentage = maturityValue.customPercentage
+        } else if (maturityValue?.level === 'Other') {
+          // Fallback if Other is selected but no valid custom percentage
+          percentage = 0
         } else if (component.maturityDefaults) {
           const defaults = component.maturityDefaults
           switch (maturityValue?.level) {
@@ -205,6 +207,7 @@ export default function MaturityStep() {
 
         // Build inputs based on component type
         const inputs: any = {}
+        let shouldEnable = !!maturityArea // Enable if has maturity area selection
 
         // Ticket elimination components
         if (component.id === 'knowledgeBase') {
@@ -242,13 +245,20 @@ export default function MaturityStep() {
             ? maturityValue.customTimeSaved
             : (component.maturityDefaults?.low?.timeSavedMinutes || 8)
         }
-        // Agent productivity components
+        // Agent productivity components - ALWAYS ENABLE for self-service calculator
+        // These represent time saved on remaining tickets after elimination
         else if (component.id === 'incidentManagement') {
+          // Always enable - uses remaining incidents after ticket elimination
+          shouldEnable = true
           inputs.ticketsRemaining = agentData.annualIncidents || 0
-          inputs.timeSavedMinutes = percentage
+          // Use Medium maturity default for time saved (7 mins)
+          inputs.timeSavedMinutes = component.maturityDefaults?.medium?.timeSavedMinutes || 7
         } else if (component.id === 'serviceRequestManagement') {
+          // Always enable - uses remaining service requests after automation
+          shouldEnable = true
           inputs.requestsRemaining = agentData.annualServiceRequests || 0
-          inputs.timeSavedMinutes = percentage
+          // Use Medium maturity default for time saved (8 mins)
+          inputs.timeSavedMinutes = component.maturityDefaults?.medium?.timeSavedMinutes || 8
         } else if (component.id === 'problemManagement') {
           inputs.numberOfProblems = 50
           inputs.timeSavedMinutes = percentage
@@ -299,9 +309,12 @@ export default function MaturityStep() {
           inputs.timeSavedMinutes = component.maturityDefaults?.low?.timeSavedMinutes || 3
         }
 
-        componentData[component.id] = {
-          inputs,
-          enabled: true,
+        // Only add component if it should be enabled and has inputs
+        if (shouldEnable && Object.keys(inputs).length > 0) {
+          componentData[component.id] = {
+            inputs,
+            enabled: true,
+          }
         }
       })
 
@@ -319,6 +332,9 @@ export default function MaturityStep() {
         year3Freddy: 0,
         implementation: implementationPrice,
       }
+
+      // Save component data to wizard state (for debugger access)
+      updateComponentData(componentData)
 
       // Call new calculation engine
       const results = calculateROIResults({

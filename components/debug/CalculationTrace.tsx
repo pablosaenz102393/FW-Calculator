@@ -23,7 +23,7 @@ export default function CalculationTrace({
   const [showRawData, setShowRawData] = useState(false)
 
   const { agentData, opportunity, pricing, componentData } = state
-  const { componentResults, yearlyData, analysisResults, discountRate, benefitRealizationFactors } =
+  const { componentResults, yearlyData, analysisResults, benefitRealizationFactors } =
     calculatedResults
 
   const currencySymbol = opportunity.localCurrency
@@ -149,16 +149,37 @@ export default function CalculationTrace({
     const config = getComponentById(componentId)
     if (!config || !config.supportsMaturity) return null
 
-    const componentData = state.componentData[componentId]
-    const selectedLevel = componentData?.maturityLevel
-    const customPercentage = componentData?.customPercentage
+    const compData = state.componentData[componentId]
+    const selectedLevel = compData?.maturityLevel
+    const customPercentage = compData?.customPercentage
+    const inputs = compData?.inputs || {}
 
     // Get the component result to see actual benefit
     const result = componentResults.find(c => c.componentId === componentId)
 
+    // Try to determine which level matches current inputs if not explicitly set
+    let inferredLevel = selectedLevel
+    if (!selectedLevel && config.maturityDefaults) {
+      // Check if current inputs match any maturity level defaults
+      const currentPct = inputs.percentEliminated || inputs.percentTimeSaved || inputs.percentHandledByCopilot
+      const currentTime = inputs.timeSavedMinutes
+
+      if (currentPct !== undefined || currentTime !== undefined) {
+        for (const [level, defaults] of Object.entries(config.maturityDefaults)) {
+          const levelDefaults = defaults as Record<string, number>
+          const matchesPct = currentPct === undefined || levelDefaults.percentEliminated === currentPct || levelDefaults.percentTimeSaved === currentPct || levelDefaults.percentHandledByAI === currentPct
+          const matchesTime = currentTime === undefined || levelDefaults.timeSavedMinutes === currentTime
+          if (matchesPct && matchesTime) {
+            inferredLevel = level.charAt(0).toUpperCase() + level.slice(1) + ' (inferred)'
+            break
+          }
+        }
+      }
+    }
+
     return {
       componentName: config.name,
-      selectedLevel,
+      selectedLevel: inferredLevel || (result?.annualBenefit ? 'Using custom values' : 'Not set'),
       customPercentage,
       maturityDefaults: config.maturityDefaults,
       otherRange: config.otherRange,
@@ -255,26 +276,19 @@ export default function CalculationTrace({
       })
     }
 
-    // Standard Agent Productivity
-    else if (
-      [
-        'incidentManagement',
-        'serviceRequestManagement',
-        'problemManagement',
-        'serviceCatalogExpansion',
-      ].includes(component.componentId)
-    ) {
+    // Incident Management
+    else if (component.componentId === 'incidentManagement') {
       const ticketsRemaining = inputs.ticketsRemaining || 0
       const timeSaved = inputs.timeSavedMinutes || 0
 
       steps.push({
         label: 'Formula',
-        value: `Annual Benefit = Tickets × (Mins Saved ÷ 60) × Hourly Rate`,
-        description: 'Standard agent productivity formula',
+        value: `Annual Benefit = Tickets Remaining × (Mins Saved ÷ 60) × Hourly Rate`,
+        description: 'Time saved per incident after ticket elimination',
       })
       steps.push({
         label: 'Inputs',
-        value: `Tickets: ${fn(ticketsRemaining, 0)} | Time Saved: ${fn(timeSaved, 0)} mins | Hourly Rate: ${fc(hourlyRate)}`,
+        value: `Tickets Remaining: ${fn(ticketsRemaining, 0)} | Time Saved: ${fn(timeSaved, 0)} mins | Hourly Rate: ${fc(hourlyRate)}`,
       })
 
       const hoursFreed = ticketsRemaining * (timeSaved / 60)
@@ -282,6 +296,87 @@ export default function CalculationTrace({
       steps.push({
         label: 'Step 1: Hours Freed',
         value: `${fn(ticketsRemaining, 0)} × (${fn(timeSaved, 0)} ÷ 60) = ${fn(hoursFreed, 2)} hours`,
+      })
+      steps.push({
+        label: 'Step 2: Annual Benefit',
+        value: `${fn(hoursFreed, 2)} × ${fc(hourlyRate)} = ${fc(component.annualBenefit)}`,
+      })
+    }
+
+    // Service Request Management
+    else if (component.componentId === 'serviceRequestManagement') {
+      const requestsRemaining = inputs.requestsRemaining || 0
+      const timeSaved = inputs.timeSavedMinutes || 0
+
+      steps.push({
+        label: 'Formula',
+        value: `Annual Benefit = Requests Remaining × (Mins Saved ÷ 60) × Hourly Rate`,
+        description: 'Time saved per service request after automation',
+      })
+      steps.push({
+        label: 'Inputs',
+        value: `Requests Remaining: ${fn(requestsRemaining, 0)} | Time Saved: ${fn(timeSaved, 0)} mins | Hourly Rate: ${fc(hourlyRate)}`,
+      })
+
+      const hoursFreed = requestsRemaining * (timeSaved / 60)
+
+      steps.push({
+        label: 'Step 1: Hours Freed',
+        value: `${fn(requestsRemaining, 0)} × (${fn(timeSaved, 0)} ÷ 60) = ${fn(hoursFreed, 2)} hours`,
+      })
+      steps.push({
+        label: 'Step 2: Annual Benefit',
+        value: `${fn(hoursFreed, 2)} × ${fc(hourlyRate)} = ${fc(component.annualBenefit)}`,
+      })
+    }
+
+    // Problem Management
+    else if (component.componentId === 'problemManagement') {
+      const numberOfProblems = inputs.numberOfProblems || 0
+      const timeSaved = inputs.timeSavedMinutes || 0
+
+      steps.push({
+        label: 'Formula',
+        value: `Annual Benefit = Problems × (Mins Saved ÷ 60) × Hourly Rate`,
+        description: 'Time saved per problem investigation/resolution',
+      })
+      steps.push({
+        label: 'Inputs',
+        value: `Problems: ${fn(numberOfProblems, 0)} | Time Saved: ${fn(timeSaved, 0)} mins | Hourly Rate: ${fc(hourlyRate)}`,
+      })
+
+      const hoursFreed = numberOfProblems * (timeSaved / 60)
+
+      steps.push({
+        label: 'Step 1: Hours Freed',
+        value: `${fn(numberOfProblems, 0)} × (${fn(timeSaved, 0)} ÷ 60) = ${fn(hoursFreed, 2)} hours`,
+      })
+      steps.push({
+        label: 'Step 2: Annual Benefit',
+        value: `${fn(hoursFreed, 2)} × ${fc(hourlyRate)} = ${fc(component.annualBenefit)}`,
+      })
+    }
+
+    // Service Catalog Expansion
+    else if (component.componentId === 'serviceCatalogExpansion') {
+      const additionalRequests = inputs.additionalCatalogRequests || 0
+      const timeSaved = inputs.timeSavedMinutes || 0
+
+      steps.push({
+        label: 'Formula',
+        value: `Annual Benefit = Additional Catalog Requests × (Mins Saved ÷ 60) × Hourly Rate`,
+        description: 'Time saved via expanded service catalog',
+      })
+      steps.push({
+        label: 'Inputs',
+        value: `Additional Requests: ${fn(additionalRequests, 0)} | Time Saved: ${fn(timeSaved, 0)} mins | Hourly Rate: ${fc(hourlyRate)}`,
+      })
+
+      const hoursFreed = additionalRequests * (timeSaved / 60)
+
+      steps.push({
+        label: 'Step 1: Hours Freed',
+        value: `${fn(additionalRequests, 0)} × (${fn(timeSaved, 0)} ÷ 60) = ${fn(hoursFreed, 2)} hours`,
       })
       steps.push({
         label: 'Step 2: Annual Benefit',
@@ -402,28 +497,29 @@ export default function CalculationTrace({
 
     // License Consolidation
     else if (component.componentId === 'licenseConsolidation') {
-      const tools = inputs.numberOfTools || 0
-      const costPerTool = inputs.costPerTool || 0
+      const tools = inputs.numberOfToolsEliminated || 0
+      const costPerTool = inputs.costPerToolEliminated || 0
 
       steps.push({
         label: 'Formula',
-        value: `Annual Benefit = Number of Tools × Cost Per Tool`,
+        value: `Annual Benefit = Number of Tools Eliminated × Cost Per Tool`,
         description: 'Simple cost savings from consolidating tools',
       })
       steps.push({
         label: 'Inputs',
-        value: `Tools: ${fn(tools, 0)} | Cost Per Tool: ${fc(costPerTool)}`,
+        value: `Tools Eliminated: ${fn(tools, 0)} | Cost Per Tool: ${fc(costPerTool)}`,
       })
       steps.push({
-        label: 'Annual Benefit',
+        label: 'Step 1: Annual Benefit',
         value: `${fn(tools, 0)} × ${fc(costPerTool)} = ${fc(component.annualBenefit)}`,
       })
     }
 
     // Infrastructure Savings
     else if (component.componentId === 'infrastructureSavings') {
-      const costBefore = inputs.costBefore || 0
-      const costAfter = inputs.costAfter || 0
+      const costBefore = inputs.annualInfraCostBefore || 0
+      const costAfter = inputs.annualInfraCostAfter || 0
+      const savings = Math.max(0, costBefore - costAfter)
 
       steps.push({
         label: 'Formula',
@@ -435,8 +531,8 @@ export default function CalculationTrace({
         value: `Cost Before: ${fc(costBefore)} | Cost After: ${fc(costAfter)}`,
       })
       steps.push({
-        label: 'Annual Benefit',
-        value: `MAX(0, ${fc(costBefore)} - ${fc(costAfter)}) = ${fc(component.annualBenefit)}`,
+        label: 'Step 1: Annual Benefit',
+        value: `MAX(0, ${fc(costBefore)} - ${fc(costAfter)}) = ${fc(savings)}`,
       })
     }
 
@@ -444,6 +540,7 @@ export default function CalculationTrace({
     else if (component.componentId === 'vendorSpendReduction') {
       const currentSpend = inputs.currentVendorSpend || 0
       const pctReduction = inputs.percentReduction || 0
+      const reduction = currentSpend * (pctReduction / 100)
 
       steps.push({
         label: 'Formula',
@@ -455,8 +552,8 @@ export default function CalculationTrace({
         value: `Current Spend: ${fc(currentSpend)} | % Reduction: ${fp(pctReduction)}`,
       })
       steps.push({
-        label: 'Annual Benefit',
-        value: `${fc(currentSpend)} × (${fp(pctReduction)} ÷ 100) = ${fc(component.annualBenefit)}`,
+        label: 'Step 1: Annual Benefit',
+        value: `${fc(currentSpend)} × (${fp(pctReduction)} ÷ 100) = ${fc(reduction)}`,
       })
     }
 
@@ -495,17 +592,17 @@ export default function CalculationTrace({
     // Freddy Copilot Savings
     else if (component.componentId === 'freddyCopilotSavings') {
       const interactions = inputs.numberOfInteractions || 0
-      const pctHandled = inputs.percentHandledByCopilot || 0
+      const pctHandled = inputs.percentHandledByAI || 0
       const timeSaved = inputs.timeSavedMinutes || 0
 
       steps.push({
         label: 'Formula',
-        value: `Annual Benefit = Interactions × (% Handled ÷ 100) × (Mins Saved ÷ 60) × Hourly Rate`,
+        value: `Annual Benefit = Interactions × (% Assisted ÷ 100) × (Mins Saved ÷ 60) × Hourly Rate`,
         description: 'Freddy Copilot productivity gains',
       })
       steps.push({
         label: 'Inputs',
-        value: `Interactions: ${fn(interactions, 0)} | % Handled: ${fp(pctHandled)} | Time Saved: ${fn(timeSaved, 0)} mins | Hourly Rate: ${fc(hourlyRate)}`,
+        value: `Interactions: ${fn(interactions, 0)} | % Assisted: ${fp(pctHandled)} | Time Saved: ${fn(timeSaved, 0)} mins | Hourly Rate: ${fc(hourlyRate)}`,
       })
 
       const interactionsAssisted = interactions * (pctHandled / 100)
@@ -578,10 +675,6 @@ export default function CalculationTrace({
             <span className="text-gray-400">Freddy Enabled:</span>{' '}
             <span className="text-white">{opportunity.freddyCoPilot ? 'Yes' : 'No'}</span>
           </div>
-          <div className="mt-2">
-            <span className="text-gray-400">Discount Rate:</span>{' '}
-            <span className="text-white">{fp(discountRate)}</span>
-          </div>
           <div>
             <span className="text-gray-400">Benefit Realization Factors:</span>
           </div>
@@ -650,17 +743,32 @@ export default function CalculationTrace({
             </div>
             <div className="ml-4 space-y-1">
               {componentStatus.disabled.map((comp) => {
-                let reason = 'Component not selected'
-                if (comp.requiresESM && !opportunity.esm) reason = 'ESM not enabled'
-                if (comp.requiresFreddy && !opportunity.freddyCoPilot) reason = 'Freddy Co-Pilot not enabled'
-                if (!comp.visibleForPlans.includes(opportunity.plan || 'Growth')) reason = `Not available for ${opportunity.plan} plan`
+                // Determine if component is unavailable due to requirements or just not selected
+                const planOk = comp.visibleForPlans.includes(opportunity.plan || 'Growth')
+                const esmOk = !comp.requiresESM || opportunity.esm
+                const freddyOk = !comp.requiresFreddy || opportunity.freddyCoPilot
+                const isAvailable = planOk && esmOk && freddyOk
+
+                let reason = 'Available but not selected by user'
+                let reasonColor = 'text-blue-400'
+
+                if (!planOk) {
+                  reason = `Not available for ${opportunity.plan || 'Growth'} plan`
+                  reasonColor = 'text-yellow-500'
+                } else if (!esmOk) {
+                  reason = 'Requires ESM (not enabled)'
+                  reasonColor = 'text-yellow-500'
+                } else if (!freddyOk) {
+                  reason = 'Requires Freddy Co-Pilot (not enabled)'
+                  reasonColor = 'text-yellow-500'
+                }
 
                 return (
                   <div key={comp.id}>
-                    <span className="text-red-300">✗</span>{' '}
+                    <span className={isAvailable ? "text-blue-300" : "text-red-300"}>{isAvailable ? "○" : "✗"}</span>{' '}
                     <span className="text-gray-400">{comp.name}</span>
                     <span className="text-gray-600"> - {comp.category}</span>
-                    <span className="text-yellow-500"> (Reason: {reason})</span>
+                    <span className={reasonColor}> ({reason})</span>
                   </div>
                 )
               })}
@@ -771,11 +879,11 @@ export default function CalculationTrace({
                   <div className="text-yellow-400 font-bold">{impact.componentName}</div>
                   <div className="ml-4 space-y-1">
                     <div>
-                      <span className="text-gray-400">Selected:</span>{' '}
+                      <span className="text-gray-400">Maturity Level:</span>{' '}
                       <span className="text-white">
                         {impact.selectedLevel === 'Other'
                           ? `Custom (${impact.customPercentage}%)`
-                          : impact.selectedLevel || 'Not set'}
+                          : impact.selectedLevel}
                       </span>
                       {' '}→{' '}
                       <span className="text-green-300 font-bold">Annual Benefit: {fc(impact.actualBenefit)}</span>
@@ -823,6 +931,8 @@ export default function CalculationTrace({
         <div className="space-y-4">
           {componentResults.map((component, index) => {
             const steps = getCalculationSteps(component)
+            const rawInputs = componentData[component.componentId]
+            const hasInputData = rawInputs && Object.keys(rawInputs.inputs || {}).length > 0
             return (
               <div key={component.componentId} className="ml-4 border-l-2 border-gray-700 pl-4">
                 <div className="mb-2">
@@ -830,6 +940,14 @@ export default function CalculationTrace({
                     [{index + 1}] {component.componentName}
                   </span>
                   <span className="text-gray-500 ml-2">({component.category})</span>
+                  {!hasInputData && (
+                    <span className="text-red-500 ml-2 text-xs">(⚠ Input data not found in state)</span>
+                  )}
+                </div>
+                {/* Show actual calculated benefit vs debugger recreation */}
+                <div className="ml-4 mb-2 text-xs">
+                  <span className="text-purple-400">Actual Calculated Benefit: </span>
+                  <span className="text-white font-bold">{fc(component.annualBenefit)}</span>
                 </div>
 
                 {steps.map((step, stepIndex) => (
@@ -990,11 +1108,11 @@ export default function CalculationTrace({
             <div className="text-yellow-400 font-bold">Payback Period</div>
             <div className="ml-4">
               <div className="text-yellow-300">
-                Formula: Payback = (Total Costs ÷ Year 1 Benefits) × 12 months
+                Formula: Payback = (Initial Investment ÷ Year 1 Benefits) × 12 months
               </div>
               <div className="mt-1">
-                <span className="text-gray-400">Total Costs (3-Year):</span>{' '}
-                <span className="text-white">{fc(analysisResults.totalCosts3yr)}</span>
+                <span className="text-gray-400">Initial Investment (Year 1 Costs):</span>{' '}
+                <span className="text-white">{fc(yearlyData[0]?.costs || 0)}</span>
               </div>
               <div>
                 <span className="text-gray-400">Year 1 Benefits:</span>{' '}
@@ -1003,12 +1121,12 @@ export default function CalculationTrace({
               <div className="mt-1">
                 <span className="text-green-300">Calculation:</span>{' '}
                 <span className="text-white">
-                  ({fc(analysisResults.totalCosts3yr)} ÷ {fc(yearlyData[0]?.benefits || 0)}) × 12
+                  ({fc(yearlyData[0]?.costs || 0)} ÷ {fc(yearlyData[0]?.benefits || 0)}) × 12 = {fn(((yearlyData[0]?.costs || 0) / (yearlyData[0]?.benefits || 1)) * 12, 1)} months
                 </span>
               </div>
               <div className="mt-1">
                 <span className="text-green-400 font-bold text-base">
-                  → Payback Period = {fn(analysisResults.paybackPeriod, 1)} months
+                  → Payback Period = {fn(((yearlyData[0]?.costs || 0) / (yearlyData[0]?.benefits || 1)) * 12, 1)} months
                 </span>
               </div>
             </div>

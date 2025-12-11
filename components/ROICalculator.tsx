@@ -34,7 +34,7 @@ function WizardContent() {
         {/* Header */}
         <div className="bg-gradient-to-r from-primary-600 to-primary-800 px-6 py-8">
           <h1 className="text-3xl font-bold text-white text-center">
-            Freshservice Self-Service ROI Calculator
+            Freshworks Self-Service ROI Calculator
           </h1>
           <p className="mt-2 text-center text-primary-100">
             Calculate your return on investment in just a few steps
