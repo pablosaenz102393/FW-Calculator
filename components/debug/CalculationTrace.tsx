@@ -122,6 +122,189 @@ export default function CalculationTrace({
 
   const validationIssues = getValidationIssues()
 
+  // Recalculate benefits from inputs to verify against actual results
+  const verifyComponentCalculation = (componentId: string, actualBenefit: number) => {
+    const inputs = getComponentInputs(componentId)
+    let recalculatedBenefit = 0
+    let formula = ''
+    let hasInputs = Object.keys(inputs).length > 0
+
+    if (!hasInputs) {
+      return { recalculatedBenefit: 0, formula: 'No inputs available', match: false, hasInputs: false }
+    }
+
+    // Ticket Elimination Components
+    if (['knowledgeBase', 'automationServiceRequests', 'freddyAIAgent', 'proactiveProblemManagement'].includes(componentId)) {
+      const tickets = inputs.numberOfTickets || 0
+      const pct = inputs.percentEliminated || 0
+      const time = inputs.timeSavedMinutes || 0
+      recalculatedBenefit = tickets * (pct / 100) * (time / 60) * hourlyRate
+      formula = `${tickets} × ${pct}% × ${time}min ÷ 60 × $${hourlyRate.toFixed(2)}/hr`
+    }
+    // Incident Management
+    else if (componentId === 'incidentManagement') {
+      const tickets = inputs.ticketsRemaining || 0
+      const time = inputs.timeSavedMinutes || 0
+      recalculatedBenefit = tickets * (time / 60) * hourlyRate
+      formula = `${tickets} × ${time}min ÷ 60 × $${hourlyRate.toFixed(2)}/hr`
+    }
+    // Service Request Management
+    else if (componentId === 'serviceRequestManagement') {
+      const requests = inputs.requestsRemaining || 0
+      const time = inputs.timeSavedMinutes || 0
+      recalculatedBenefit = requests * (time / 60) * hourlyRate
+      formula = `${requests} × ${time}min ÷ 60 × $${hourlyRate.toFixed(2)}/hr`
+    }
+    // Problem Management
+    else if (componentId === 'problemManagement') {
+      const problems = inputs.numberOfProblems || 0
+      const time = inputs.timeSavedMinutes || 0
+      recalculatedBenefit = problems * (time / 60) * hourlyRate
+      formula = `${problems} × ${time}min ÷ 60 × $${hourlyRate.toFixed(2)}/hr`
+    }
+    // Service Catalog Expansion
+    else if (componentId === 'serviceCatalogExpansion') {
+      const requests = inputs.additionalCatalogRequests || 0
+      const time = inputs.timeSavedMinutes || 0
+      recalculatedBenefit = requests * (time / 60) * hourlyRate
+      formula = `${requests} × ${time}min ÷ 60 × $${hourlyRate.toFixed(2)}/hr`
+    }
+    // License Consolidation
+    else if (componentId === 'licenseConsolidation') {
+      const tools = inputs.numberOfToolsEliminated || 0
+      const cost = inputs.costPerToolEliminated || 0
+      recalculatedBenefit = tools * cost
+      formula = `${tools} tools × $${cost}`
+    }
+    // Infrastructure Savings
+    else if (componentId === 'infrastructureSavings') {
+      const before = inputs.annualInfraCostBefore || 0
+      const after = inputs.annualInfraCostAfter || 0
+      recalculatedBenefit = Math.max(0, before - after)
+      formula = `max(0, $${before} - $${after})`
+    }
+
+    const tolerance = 0.01 // Allow 1% tolerance for floating point
+    const match = Math.abs(recalculatedBenefit - actualBenefit) <= Math.abs(actualBenefit * tolerance) ||
+                  (recalculatedBenefit === 0 && actualBenefit === 0)
+
+    return { recalculatedBenefit, formula, match, hasInputs }
+  }
+
+  // Sanity checks for results
+  const getSanityChecks = () => {
+    const checks: { type: 'error' | 'warning' | 'success' | 'info'; message: string }[] = []
+
+    // Check for zero total benefits
+    if (analysisResults.totalBenefits3yr === 0) {
+      checks.push({ type: 'error', message: 'Total 3-Year Benefits is $0 - no value components are generating benefits' })
+    }
+
+    // Check for extremely high ROI (>500%)
+    if (analysisResults.roi > 500) {
+      checks.push({ type: 'warning', message: `ROI of ${analysisResults.roi.toFixed(0)}% is unusually high - verify inputs are realistic` })
+    }
+
+    // Check for negative ROI
+    if (analysisResults.roi < 0) {
+      checks.push({ type: 'error', message: 'Negative ROI - costs exceed benefits over 3 years' })
+    }
+
+    // Check for very long payback period (>36 months)
+    if (analysisResults.paybackPeriod > 36) {
+      checks.push({ type: 'warning', message: `Payback period of ${analysisResults.paybackPeriod.toFixed(1)} months exceeds 3-year analysis period` })
+    }
+
+    // Check for NaN values
+    if (isNaN(analysisResults.roi) || isNaN(analysisResults.paybackPeriod) || isNaN(analysisResults.totalBenefits3yr)) {
+      checks.push({ type: 'error', message: 'NaN detected in calculations - check for division by zero or missing inputs' })
+    }
+
+    // Check if any component has $0 benefit
+    const zeroComponents = componentResults.filter(c => c.annualBenefit === 0)
+    if (zeroComponents.length > 0) {
+      checks.push({ type: 'warning', message: `${zeroComponents.length} enabled component(s) have $0 annual benefit: ${zeroComponents.map(c => c.componentName).join(', ')}` })
+    }
+
+    // Check hourly rate sanity
+    if (hourlyRate < 10 || hourlyRate > 200) {
+      checks.push({ type: 'warning', message: `Hourly rate of $${hourlyRate.toFixed(2)} seems ${hourlyRate < 10 ? 'too low' : 'too high'} - typical range is $25-$75` })
+    }
+
+    // Check ticket volumes vs agent count
+    const totalTickets = (agentData.annualIncidents || 0) + (agentData.annualServiceRequests || 0)
+    const ticketsPerAgent = totalTickets / (agentData.agentCount || 1)
+    if (ticketsPerAgent > 10000) {
+      checks.push({ type: 'warning', message: `${ticketsPerAgent.toFixed(0)} tickets/agent/year is very high - verify ticket volumes` })
+    }
+    if (ticketsPerAgent < 100 && totalTickets > 0) {
+      checks.push({ type: 'warning', message: `${ticketsPerAgent.toFixed(0)} tickets/agent/year is very low - verify agent count` })
+    }
+
+    // Success check if no issues
+    if (checks.length === 0) {
+      checks.push({ type: 'success', message: 'All sanity checks passed - results appear reasonable' })
+    }
+
+    return checks
+  }
+
+  const sanityChecks = getSanityChecks()
+
+  // Cross-component validation
+  const getCrossComponentValidation = () => {
+    const validations: { type: 'error' | 'warning' | 'success' | 'info'; message: string }[] = []
+
+    // Check if ticket elimination percentage is being double-counted
+    const kbInputs = getComponentInputs('knowledgeBase')
+    const autoInputs = getComponentInputs('automationServiceRequests')
+    const kbPct = kbInputs.percentEliminated || 0
+    const autoPct = autoInputs.percentEliminated || 0
+
+    if (kbPct + autoPct > 100) {
+      validations.push({ type: 'error', message: `Combined elimination rate (${kbPct + autoPct}%) exceeds 100% - possible double-counting` })
+    } else if (kbPct + autoPct > 50) {
+      validations.push({ type: 'info', message: `Combined elimination rate is ${kbPct + autoPct}% - this is achievable but ambitious` })
+    }
+
+    // Check consistency between ticket elimination inputs and agent productivity inputs
+    const incidentInputs = getComponentInputs('incidentManagement')
+    const srInputs = getComponentInputs('serviceRequestManagement')
+
+    const annualIncidents = agentData.annualIncidents || 0
+    const annualSRs = agentData.annualServiceRequests || 0
+    const remainingIncidents = incidentInputs.ticketsRemaining || 0
+    const remainingSRs = srInputs.requestsRemaining || 0
+
+    // If incident management is enabled, remaining should be <= annual
+    if (remainingIncidents > 0 && remainingIncidents > annualIncidents) {
+      validations.push({ type: 'warning', message: `Remaining incidents (${remainingIncidents}) exceeds annual incidents (${annualIncidents})` })
+    }
+    if (remainingSRs > 0 && remainingSRs > annualSRs) {
+      validations.push({ type: 'warning', message: `Remaining SRs (${remainingSRs}) exceeds annual SRs (${annualSRs})` })
+    }
+
+    // Info about what's being calculated
+    const ticketElimComponents = componentResults.filter(c =>
+      ['knowledgeBase', 'automationServiceRequests', 'freddyAIAgent', 'proactiveProblemManagement'].includes(c.componentId)
+    )
+    const agentProdComponents = componentResults.filter(c =>
+      ['incidentManagement', 'serviceRequestManagement'].includes(c.componentId)
+    )
+
+    if (ticketElimComponents.length > 0 && agentProdComponents.length > 0) {
+      validations.push({ type: 'success', message: `Calculating both Ticket Elimination (${ticketElimComponents.length} components) AND Agent Productivity (${agentProdComponents.length} components)` })
+    } else if (ticketElimComponents.length > 0) {
+      validations.push({ type: 'info', message: `Only Ticket Elimination enabled (${ticketElimComponents.length} components) - Agent Productivity not included` })
+    } else if (agentProdComponents.length > 0) {
+      validations.push({ type: 'info', message: `Only Agent Productivity enabled (${agentProdComponents.length} components) - Ticket Elimination not included` })
+    }
+
+    return validations
+  }
+
+  const crossValidation = getCrossComponentValidation()
+
   // Get component enablement status
   const getComponentStatus = () => {
     const plan = opportunity.plan || 'Growth'
@@ -646,6 +829,92 @@ export default function CalculationTrace({
         ═══════════════════════════════════════════════════════
       </h3>
 
+      {/* [0] QUICK DIAGNOSTICS - Summary at top */}
+      <div className="mb-6 bg-gray-800 p-4 rounded-lg border-2 border-yellow-600">
+        <h4 className="text-yellow-400 font-bold mb-3">[0] QUICK DIAGNOSTICS</h4>
+
+        {/* Overall Status */}
+        <div className="mb-4">
+          <div className="text-lg font-bold mb-2">
+            {sanityChecks.some(c => c.type === 'error') ? (
+              <span className="text-red-400">❌ ISSUES DETECTED - Review errors below</span>
+            ) : sanityChecks.some(c => c.type === 'warning') ? (
+              <span className="text-yellow-400">⚠️ WARNINGS - Results may need verification</span>
+            ) : (
+              <span className="text-green-400">✅ ALL CHECKS PASSED</span>
+            )}
+          </div>
+        </div>
+
+        {/* Key Metrics Summary */}
+        <div className="grid grid-cols-2 gap-4 mb-4">
+          <div className="bg-gray-900 p-3 rounded">
+            <div className="text-gray-400 text-xs">3-Year ROI</div>
+            <div className={`text-xl font-bold ${analysisResults.roi < 0 ? 'text-red-400' : analysisResults.roi > 500 ? 'text-yellow-400' : 'text-green-400'}`}>
+              {fp(analysisResults.roi)}
+            </div>
+          </div>
+          <div className="bg-gray-900 p-3 rounded">
+            <div className="text-gray-400 text-xs">Payback Period</div>
+            <div className={`text-xl font-bold ${analysisResults.paybackPeriod > 36 ? 'text-yellow-400' : 'text-green-400'}`}>
+              {fn(analysisResults.paybackPeriod, 1)} months
+            </div>
+          </div>
+          <div className="bg-gray-900 p-3 rounded">
+            <div className="text-gray-400 text-xs">Total 3-Year Benefits</div>
+            <div className={`text-xl font-bold ${analysisResults.totalBenefits3yr === 0 ? 'text-red-400' : 'text-green-400'}`}>
+              {fc(analysisResults.totalBenefits3yr)}
+            </div>
+          </div>
+          <div className="bg-gray-900 p-3 rounded">
+            <div className="text-gray-400 text-xs">Active Components</div>
+            <div className="text-xl font-bold text-cyan-400">
+              {componentResults.length} of {componentStatus.total}
+            </div>
+          </div>
+        </div>
+
+        {/* Sanity Checks */}
+        <div className="mb-3">
+          <div className="text-cyan-300 text-sm font-bold mb-1">Sanity Checks:</div>
+          <div className="ml-2 space-y-1">
+            {sanityChecks.map((check, i) => (
+              <div key={i} className="flex items-start text-xs">
+                {check.type === 'error' && <span className="text-red-400 mr-2">✗</span>}
+                {check.type === 'warning' && <span className="text-yellow-400 mr-2">⚠</span>}
+                {check.type === 'success' && <span className="text-green-400 mr-2">✓</span>}
+                {check.type === 'info' && <span className="text-blue-400 mr-2">ℹ</span>}
+                <span className={
+                  check.type === 'error' ? 'text-red-300' :
+                  check.type === 'warning' ? 'text-yellow-300' :
+                  check.type === 'success' ? 'text-green-300' : 'text-blue-300'
+                }>{check.message}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Cross-Component Validation */}
+        <div>
+          <div className="text-cyan-300 text-sm font-bold mb-1">Value Pillar Analysis:</div>
+          <div className="ml-2 space-y-1">
+            {crossValidation.map((val, i) => (
+              <div key={i} className="flex items-start text-xs">
+                {val.type === 'error' && <span className="text-red-400 mr-2">✗</span>}
+                {val.type === 'warning' && <span className="text-yellow-400 mr-2">⚠</span>}
+                {val.type === 'success' && <span className="text-green-400 mr-2">✓</span>}
+                {val.type === 'info' && <span className="text-blue-400 mr-2">ℹ</span>}
+                <span className={
+                  val.type === 'error' ? 'text-red-300' :
+                  val.type === 'warning' ? 'text-yellow-300' :
+                  val.type === 'success' ? 'text-green-300' : 'text-blue-300'
+                }>{val.message}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
       {/* [1] Configuration Overview */}
       <div className="mb-6">
         <h4 className="text-cyan-400 font-bold mb-2">[1] CONFIGURATION OVERVIEW</h4>
@@ -945,10 +1214,35 @@ export default function CalculationTrace({
                   )}
                 </div>
                 {/* Show actual calculated benefit vs debugger recreation */}
-                <div className="ml-4 mb-2 text-xs">
-                  <span className="text-purple-400">Actual Calculated Benefit: </span>
-                  <span className="text-white font-bold">{fc(component.annualBenefit)}</span>
-                </div>
+                {(() => {
+                  const verification = verifyComponentCalculation(component.componentId, component.annualBenefit)
+                  return (
+                    <div className="ml-4 mb-2 p-2 bg-gray-800 rounded text-xs">
+                      <div className="flex justify-between items-center">
+                        <span className="text-purple-400">Actual Calculated: </span>
+                        <span className="text-white font-bold">{fc(component.annualBenefit)}</span>
+                      </div>
+                      {verification.hasInputs && (
+                        <>
+                          <div className="flex justify-between items-center mt-1">
+                            <span className="text-cyan-400">Debugger Recalc: </span>
+                            <span className="text-white font-bold">{fc(verification.recalculatedBenefit)}</span>
+                          </div>
+                          <div className="mt-1">
+                            {verification.match ? (
+                              <span className="text-green-400">✓ Values match</span>
+                            ) : (
+                              <span className="text-red-400">✗ MISMATCH - Difference: {fc(Math.abs(component.annualBenefit - verification.recalculatedBenefit))}</span>
+                            )}
+                          </div>
+                        </>
+                      )}
+                      {!verification.hasInputs && (
+                        <div className="mt-1 text-yellow-400">⚠ Cannot verify - input data not in state</div>
+                      )}
+                    </div>
+                  )
+                })()}
 
                 {steps.map((step, stepIndex) => (
                   <div key={stepIndex} className="ml-4 mb-1">
