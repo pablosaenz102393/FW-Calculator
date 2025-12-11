@@ -931,6 +931,8 @@ export default function CalculationTrace({
         <div className="space-y-4">
           {componentResults.map((component, index) => {
             const steps = getCalculationSteps(component)
+            const rawInputs = componentData[component.componentId]
+            const hasInputData = rawInputs && Object.keys(rawInputs.inputs || {}).length > 0
             return (
               <div key={component.componentId} className="ml-4 border-l-2 border-gray-700 pl-4">
                 <div className="mb-2">
@@ -938,6 +940,14 @@ export default function CalculationTrace({
                     [{index + 1}] {component.componentName}
                   </span>
                   <span className="text-gray-500 ml-2">({component.category})</span>
+                  {!hasInputData && (
+                    <span className="text-red-500 ml-2 text-xs">(⚠ Input data not found in state)</span>
+                  )}
+                </div>
+                {/* Show actual calculated benefit vs debugger recreation */}
+                <div className="ml-4 mb-2 text-xs">
+                  <span className="text-purple-400">Actual Calculated Benefit: </span>
+                  <span className="text-white font-bold">{fc(component.annualBenefit)}</span>
                 </div>
 
                 {steps.map((step, stepIndex) => (
