@@ -1,0 +1,1487 @@
+'use client'
+
+import { useState } from 'react'
+import {
+  ResultsData,
+  WizardState,
+  ComponentResult,
+  YearlyData,
+  CURRENCY_SYMBOLS,
+} from '@/types'
+import { getVisibleComponents, getComponentById, COMPONENT_CONFIGURATIONS } from '@/lib/controlPanel'
+import { FREDDY_COPILOT_PRICE_PER_AGENT } from '@/lib/data'
+
+interface CalculationTraceProps {
+  state: WizardState
+  calculatedResults: ResultsData
+}
+
+export default function CalculationTrace({
+  state,
+  calculatedResults,
+}: CalculationTraceProps) {
+  const [showRawData, setShowRawData] = useState(false)
+
+  const { agentData, opportunity, pricing, componentData } = state
+  const { componentResults, yearlyData, analysisResults, benefitRealizationFactors } =
+    calculatedResults
+
+  const currencySymbol = opportunity.localCurrency
+    ? CURRENCY_SYMBOLS[opportunity.localCurrency]
+    : '$'
+
+  // Calculate hourly rate
+  const hourlyRate = agentData.individualAgentExpense
+    ? agentData.individualAgentExpense / 2080
+    : 0
+
+  // Format currency
+  const fc = (value: number) => {
+    return `${currencySymbol}${value.toLocaleString('en-US', {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
+    })}`
+  }
+
+  // Format number
+  const fn = (value: number, decimals = 2) => {
+    return value.toLocaleString('en-US', {
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals,
+    })
+  }
+
+  // Format percentage
+  const fp = (value: number) => {
+    return `${fn(value, 1)}%`
+  }
+
+  // Get component input data
+  const getComponentInputs = (componentId: string): Record<string, number> => {
+    return componentData[componentId]?.inputs || {}
+  }
+
+  // Get calculation steps for each component type
+  // Validation checks for inputs
+  const getValidationIssues = () => {
+    const issues: { type: 'error' | 'warning' | 'success'; message: string }[] = []
+
+    // Agent count validation
+    if (!agentData.agentCount || agentData.agentCount === 0) {
+      issues.push({ type: 'error', message: 'Agent Count: Missing or zero (required >0)' })
+    } else {
+      issues.push({ type: 'success', message: `Agent Count: ${fn(agentData.agentCount, 0)} (valid)` })
+    }
+
+    // Individual agent expense validation
+    if (!agentData.individualAgentExpense || agentData.individualAgentExpense === 0) {
+      issues.push({ type: 'error', message: 'Individual Agent Expense: Missing or zero (required >0)' })
+    } else {
+      issues.push({ type: 'success', message: `Individual Agent Expense: ${fc(agentData.individualAgentExpense)} (valid)` })
+    }
+
+    // Annual incidents validation
+    if (agentData.annualIncidents === 0) {
+      issues.push({ type: 'warning', message: 'Annual Incidents: Zero (unusually low - verify this is correct)' })
+    } else {
+      issues.push({ type: 'success', message: `Annual Incidents: ${fn(agentData.annualIncidents || 0, 0)} (valid)` })
+    }
+
+    // Annual service requests validation (EX only)
+    if (opportunity.product === 'EX') {
+      if (agentData.annualServiceRequests === 0) {
+        issues.push({ type: 'warning', message: 'Annual Service Requests: Zero (unusually low - verify this is correct)' })
+      } else {
+        issues.push({ type: 'success', message: `Annual Service Requests: ${fn(agentData.annualServiceRequests || 0, 0)} (valid)` })
+      }
+    }
+
+    // Pricing validation
+    if (!pricing.unitPrice || pricing.unitPrice === 0) {
+      issues.push({ type: 'error', message: 'Unit Price: Missing or zero' })
+    } else {
+      issues.push({ type: 'success', message: `Unit Price: ${fc(pricing.unitPrice)} (valid)` })
+    }
+
+    // Implementation price (optional but typically >0)
+    if (pricing.implementationPrice === 0) {
+      issues.push({ type: 'warning', message: 'Implementation Price: Zero (typically >0 for new implementations)' })
+    } else {
+      issues.push({ type: 'success', message: `Implementation Price: ${fc(pricing.implementationPrice || 0)} (valid)` })
+    }
+
+    // Current licensing (can be 0 for new customers)
+    if (agentData.currentLicensing === 0 && opportunity.engagement === 'Existing') {
+      issues.push({ type: 'warning', message: 'Current Licensing: Zero (unusual for existing customer)' })
+    } else {
+      issues.push({ type: 'success', message: `Current Licensing: ${fc(agentData.currentLicensing || 0)} (valid)` })
+    }
+
+    return issues
+  }
+
+  const validationIssues = getValidationIssues()
+
+  // Recalculate benefits from inputs to verify against actual results
+  const verifyComponentCalculation = (componentId: string, actualBenefit: number) => {
+    const inputs = getComponentInputs(componentId)
+    let recalculatedBenefit = 0
+    let formula = ''
+    let hasInputs = Object.keys(inputs).length > 0
+
+    if (!hasInputs) {
+      return { recalculatedBenefit: 0, formula: 'No inputs available', match: false, hasInputs: false }
+    }
+
+    // Ticket Elimination Components
+    if (['knowledgeBase', 'automationServiceRequests', 'freddyAIAgent', 'proactiveProblemManagement'].includes(componentId)) {
+      const tickets = inputs.numberOfTickets || 0
+      const pct = inputs.percentEliminated || 0
+      const time = inputs.timeSavedMinutes || 0
+      recalculatedBenefit = tickets * (pct / 100) * (time / 60) * hourlyRate
+      formula = `${tickets} × ${pct}% × ${time}min ÷ 60 × $${hourlyRate.toFixed(2)}/hr`
+    }
+    // Incident Management
+    else if (componentId === 'incidentManagement') {
+      const tickets = inputs.ticketsRemaining || 0
+      const time = inputs.timeSavedMinutes || 0
+      recalculatedBenefit = tickets * (time / 60) * hourlyRate
+      formula = `${tickets} × ${time}min ÷ 60 × $${hourlyRate.toFixed(2)}/hr`
+    }
+    // Service Request Management
+    else if (componentId === 'serviceRequestManagement') {
+      const requests = inputs.requestsRemaining || 0
+      const time = inputs.timeSavedMinutes || 0
+      recalculatedBenefit = requests * (time / 60) * hourlyRate
+      formula = `${requests} × ${time}min ÷ 60 × $${hourlyRate.toFixed(2)}/hr`
+    }
+    // Problem Management
+    else if (componentId === 'problemManagement') {
+      const problems = inputs.numberOfProblems || 0
+      const time = inputs.timeSavedMinutes || 0
+      recalculatedBenefit = problems * (time / 60) * hourlyRate
+      formula = `${problems} × ${time}min ÷ 60 × $${hourlyRate.toFixed(2)}/hr`
+    }
+    // Service Catalog Expansion
+    else if (componentId === 'serviceCatalogExpansion') {
+      const requests = inputs.additionalCatalogRequests || 0
+      const time = inputs.timeSavedMinutes || 0
+      recalculatedBenefit = requests * (time / 60) * hourlyRate
+      formula = `${requests} × ${time}min ÷ 60 × $${hourlyRate.toFixed(2)}/hr`
+    }
+    // License Consolidation
+    else if (componentId === 'licenseConsolidation') {
+      const tools = inputs.numberOfToolsEliminated || 0
+      const cost = inputs.costPerToolEliminated || 0
+      recalculatedBenefit = tools * cost
+      formula = `${tools} tools × $${cost}`
+    }
+    // Infrastructure Savings
+    else if (componentId === 'infrastructureSavings') {
+      const before = inputs.annualInfraCostBefore || 0
+      const after = inputs.annualInfraCostAfter || 0
+      recalculatedBenefit = Math.max(0, before - after)
+      formula = `max(0, $${before} - $${after})`
+    }
+
+    const tolerance = 0.01 // Allow 1% tolerance for floating point
+    const match = Math.abs(recalculatedBenefit - actualBenefit) <= Math.abs(actualBenefit * tolerance) ||
+                  (recalculatedBenefit === 0 && actualBenefit === 0)
+
+    return { recalculatedBenefit, formula, match, hasInputs }
+  }
+
+  // Sanity checks for results
+  const getSanityChecks = () => {
+    const checks: { type: 'error' | 'warning' | 'success' | 'info'; message: string }[] = []
+
+    // Check for zero total benefits
+    if (analysisResults.totalBenefits3yr === 0) {
+      checks.push({ type: 'error', message: 'Total 3-Year Benefits is $0 - no value components are generating benefits' })
+    }
+
+    // Check for extremely high ROI (>500%)
+    if (analysisResults.roi > 500) {
+      checks.push({ type: 'warning', message: `ROI of ${analysisResults.roi.toFixed(0)}% is unusually high - verify inputs are realistic` })
+    }
+
+    // Check for negative ROI
+    if (analysisResults.roi < 0) {
+      checks.push({ type: 'error', message: 'Negative ROI - costs exceed benefits over 3 years' })
+    }
+
+    // Check for very long payback period (>36 months)
+    if (analysisResults.paybackPeriod > 36) {
+      checks.push({ type: 'warning', message: `Payback period of ${analysisResults.paybackPeriod.toFixed(1)} months exceeds 3-year analysis period` })
+    }
+
+    // Check for NaN values
+    if (isNaN(analysisResults.roi) || isNaN(analysisResults.paybackPeriod) || isNaN(analysisResults.totalBenefits3yr)) {
+      checks.push({ type: 'error', message: 'NaN detected in calculations - check for division by zero or missing inputs' })
+    }
+
+    // Check if any component has $0 benefit
+    const zeroComponents = componentResults.filter(c => c.annualBenefit === 0)
+    if (zeroComponents.length > 0) {
+      checks.push({ type: 'warning', message: `${zeroComponents.length} enabled component(s) have $0 annual benefit: ${zeroComponents.map(c => c.componentName).join(', ')}` })
+    }
+
+    // Check hourly rate sanity
+    if (hourlyRate < 10 || hourlyRate > 200) {
+      checks.push({ type: 'warning', message: `Hourly rate of $${hourlyRate.toFixed(2)} seems ${hourlyRate < 10 ? 'too low' : 'too high'} - typical range is $25-$75` })
+    }
+
+    // Check ticket volumes vs agent count
+    const totalTickets = (agentData.annualIncidents || 0) + (agentData.annualServiceRequests || 0)
+    const ticketsPerAgent = totalTickets / (agentData.agentCount || 1)
+    if (ticketsPerAgent > 10000) {
+      checks.push({ type: 'warning', message: `${ticketsPerAgent.toFixed(0)} tickets/agent/year is very high - verify ticket volumes` })
+    }
+    if (ticketsPerAgent < 100 && totalTickets > 0) {
+      checks.push({ type: 'warning', message: `${ticketsPerAgent.toFixed(0)} tickets/agent/year is very low - verify agent count` })
+    }
+
+    // Success check if no issues
+    if (checks.length === 0) {
+      checks.push({ type: 'success', message: 'All sanity checks passed - results appear reasonable' })
+    }
+
+    return checks
+  }
+
+  const sanityChecks = getSanityChecks()
+
+  // Cross-component validation
+  const getCrossComponentValidation = () => {
+    const validations: { type: 'error' | 'warning' | 'success' | 'info'; message: string }[] = []
+
+    // Check if ticket elimination percentage is being double-counted
+    const kbInputs = getComponentInputs('knowledgeBase')
+    const autoInputs = getComponentInputs('automationServiceRequests')
+    const kbPct = kbInputs.percentEliminated || 0
+    const autoPct = autoInputs.percentEliminated || 0
+
+    if (kbPct + autoPct > 100) {
+      validations.push({ type: 'error', message: `Combined elimination rate (${kbPct + autoPct}%) exceeds 100% - possible double-counting` })
+    } else if (kbPct + autoPct > 50) {
+      validations.push({ type: 'info', message: `Combined elimination rate is ${kbPct + autoPct}% - this is achievable but ambitious` })
+    }
+
+    // Check consistency between ticket elimination inputs and agent productivity inputs
+    const incidentInputs = getComponentInputs('incidentManagement')
+    const srInputs = getComponentInputs('serviceRequestManagement')
+
+    const annualIncidents = agentData.annualIncidents || 0
+    const annualSRs = agentData.annualServiceRequests || 0
+    const remainingIncidents = incidentInputs.ticketsRemaining || 0
+    const remainingSRs = srInputs.requestsRemaining || 0
+
+    // If incident management is enabled, remaining should be <= annual
+    if (remainingIncidents > 0 && remainingIncidents > annualIncidents) {
+      validations.push({ type: 'warning', message: `Remaining incidents (${remainingIncidents}) exceeds annual incidents (${annualIncidents})` })
+    }
+    if (remainingSRs > 0 && remainingSRs > annualSRs) {
+      validations.push({ type: 'warning', message: `Remaining SRs (${remainingSRs}) exceeds annual SRs (${annualSRs})` })
+    }
+
+    // Info about what's being calculated
+    const ticketElimComponents = componentResults.filter(c =>
+      ['knowledgeBase', 'automationServiceRequests', 'freddyAIAgent', 'proactiveProblemManagement'].includes(c.componentId)
+    )
+    const agentProdComponents = componentResults.filter(c =>
+      ['incidentManagement', 'serviceRequestManagement'].includes(c.componentId)
+    )
+
+    if (ticketElimComponents.length > 0 && agentProdComponents.length > 0) {
+      validations.push({ type: 'success', message: `Calculating both Ticket Elimination (${ticketElimComponents.length} components) AND Agent Productivity (${agentProdComponents.length} components)` })
+    } else if (ticketElimComponents.length > 0) {
+      validations.push({ type: 'info', message: `Only Ticket Elimination enabled (${ticketElimComponents.length} components) - Agent Productivity not included` })
+    } else if (agentProdComponents.length > 0) {
+      validations.push({ type: 'info', message: `Only Agent Productivity enabled (${agentProdComponents.length} components) - Ticket Elimination not included` })
+    }
+
+    return validations
+  }
+
+  const crossValidation = getCrossComponentValidation()
+
+  // Get component enablement status
+  const getComponentStatus = () => {
+    const plan = opportunity.plan || 'Growth'
+    const esmEnabled = opportunity.esm || false
+    const freddyEnabled = opportunity.freddyCoPilot || false
+
+    const visibleComponents = getVisibleComponents(plan, esmEnabled, freddyEnabled)
+    const enabledComponents = componentResults.map(c => c.componentId)
+
+    const enabled = COMPONENT_CONFIGURATIONS.filter(c => enabledComponents.includes(c.id))
+    const disabled = COMPONENT_CONFIGURATIONS.filter(c => !enabledComponents.includes(c.id))
+
+    return {
+      total: COMPONENT_CONFIGURATIONS.length,
+      enabledCount: enabled.length,
+      enabled,
+      disabled,
+    }
+  }
+
+  const componentStatus = getComponentStatus()
+
+  // Get maturity impact for a component
+  const getMaturityImpact = (componentId: string) => {
+    const config = getComponentById(componentId)
+    if (!config || !config.supportsMaturity) return null
+
+    const compData = state.componentData[componentId]
+    const selectedLevel = compData?.maturityLevel
+    const customPercentage = compData?.customPercentage
+    const inputs = compData?.inputs || {}
+
+    // Get the component result to see actual benefit
+    const result = componentResults.find(c => c.componentId === componentId)
+
+    // Try to determine which level matches current inputs if not explicitly set
+    let inferredLevel = selectedLevel
+    if (!selectedLevel && config.maturityDefaults) {
+      // Check if current inputs match any maturity level defaults
+      const currentPct = inputs.percentEliminated || inputs.percentTimeSaved || inputs.percentHandledByCopilot
+      const currentTime = inputs.timeSavedMinutes
+
+      if (currentPct !== undefined || currentTime !== undefined) {
+        for (const [level, defaults] of Object.entries(config.maturityDefaults)) {
+          const levelDefaults = defaults as Record<string, number>
+          const matchesPct = currentPct === undefined || levelDefaults.percentEliminated === currentPct || levelDefaults.percentTimeSaved === currentPct || levelDefaults.percentHandledByAI === currentPct
+          const matchesTime = currentTime === undefined || levelDefaults.timeSavedMinutes === currentTime
+          if (matchesPct && matchesTime) {
+            inferredLevel = level.charAt(0).toUpperCase() + level.slice(1) + ' (inferred)'
+            break
+          }
+        }
+      }
+    }
+
+    return {
+      componentName: config.name,
+      selectedLevel: inferredLevel || (result?.annualBenefit ? 'Using custom values' : 'Not set'),
+      customPercentage,
+      maturityDefaults: config.maturityDefaults,
+      otherRange: config.otherRange,
+      actualBenefit: result?.annualBenefit || 0,
+    }
+  }
+
+  const getCalculationSteps = (component: ComponentResult) => {
+    const inputs = getComponentInputs(component.componentId)
+    const steps: { label: string; value: string; description?: string }[] = []
+
+    // Ticket Elimination Components
+    if (
+      [
+        'knowledgeBase',
+        'automationServiceRequests',
+        'freddyAIAgent',
+        'proactiveProblemManagement',
+      ].includes(component.componentId)
+    ) {
+      const tickets = inputs.numberOfTickets || 0
+      const pctEliminated = inputs.percentEliminated || 0
+      const timeSaved = inputs.timeSavedMinutes || 0
+
+      steps.push({
+        label: 'Formula',
+        value: `Annual Benefit = Tickets × (% Eliminated ÷ 100) × (Mins Saved ÷ 60) × Hourly Rate`,
+        description: 'Standard ticket elimination formula',
+      })
+      steps.push({
+        label: 'Inputs',
+        value: `Tickets: ${fn(tickets, 0)} | % Eliminated: ${fp(pctEliminated)} | Time Saved: ${fn(timeSaved, 0)} mins | Hourly Rate: ${fc(hourlyRate)}`,
+      })
+
+      const ticketsEliminated = tickets * (pctEliminated / 100)
+      const hoursFreed = ticketsEliminated * (timeSaved / 60)
+
+      steps.push({
+        label: 'Step 1: Tickets Eliminated',
+        value: `${fn(tickets, 0)} × (${fp(pctEliminated)} ÷ 100) = ${fn(ticketsEliminated, 2)} tickets`,
+      })
+      steps.push({
+        label: 'Step 2: Hours Freed',
+        value: `${fn(ticketsEliminated, 2)} × (${fn(timeSaved, 0)} ÷ 60) = ${fn(hoursFreed, 2)} hours`,
+      })
+      steps.push({
+        label: 'Step 3: Annual Benefit',
+        value: `${fn(hoursFreed, 2)} × ${fc(hourlyRate)} = ${fc(component.annualBenefit)}`,
+      })
+    }
+
+    // ESM Ticket Elimination (aggregates 4 departments)
+    else if (component.componentId === 'esmTicketElimination') {
+      const hrTickets = inputs.hrTickets || 0
+      const facilitiesTickets = inputs.facilitiesTickets || 0
+      const legalTickets = inputs.legalTickets || 0
+      const financeTickets = inputs.financeTickets || 0
+      const totalTickets = hrTickets + facilitiesTickets + legalTickets + financeTickets
+      const pctEliminated = inputs.percentEliminated || 0
+      const timeSaved = inputs.timeSavedMinutes || 0
+
+      steps.push({
+        label: 'Formula',
+        value: `Annual Benefit = Total ESM Tickets × (% Eliminated ÷ 100) × (Mins Saved ÷ 60) × Hourly Rate`,
+        description: 'Aggregates tickets from HR, Facilities, Legal, and Finance',
+      })
+      steps.push({
+        label: 'Inputs',
+        value: `HR: ${fn(hrTickets, 0)} | Facilities: ${fn(facilitiesTickets, 0)} | Legal: ${fn(legalTickets, 0)} | Finance: ${fn(financeTickets, 0)}`,
+      })
+      steps.push({
+        label: 'ESM Tickets',
+        value: `% Eliminated: ${fp(pctEliminated)} | Time Saved: ${fn(timeSaved, 0)} mins | Hourly Rate: ${fc(hourlyRate)}`,
+      })
+
+      const ticketsEliminated = totalTickets * (pctEliminated / 100)
+      const hoursFreed = ticketsEliminated * (timeSaved / 60)
+
+      steps.push({
+        label: 'Step 1: Total ESM Tickets',
+        value: `${fn(hrTickets, 0)} + ${fn(facilitiesTickets, 0)} + ${fn(legalTickets, 0)} + ${fn(financeTickets, 0)} = ${fn(totalTickets, 0)} tickets`,
+      })
+      steps.push({
+        label: 'Step 2: Tickets Eliminated',
+        value: `${fn(totalTickets, 0)} × (${fp(pctEliminated)} ÷ 100) = ${fn(ticketsEliminated, 2)} tickets`,
+      })
+      steps.push({
+        label: 'Step 3: Hours Freed',
+        value: `${fn(ticketsEliminated, 2)} × (${fn(timeSaved, 0)} ÷ 60) = ${fn(hoursFreed, 2)} hours`,
+      })
+      steps.push({
+        label: 'Step 4: Annual Benefit',
+        value: `${fn(hoursFreed, 2)} × ${fc(hourlyRate)} = ${fc(component.annualBenefit)}`,
+      })
+    }
+
+    // Incident Management
+    else if (component.componentId === 'incidentManagement') {
+      const ticketsRemaining = inputs.ticketsRemaining || 0
+      const timeSaved = inputs.timeSavedMinutes || 0
+
+      steps.push({
+        label: 'Formula',
+        value: `Annual Benefit = Tickets Remaining × (Mins Saved ÷ 60) × Hourly Rate`,
+        description: 'Time saved per incident after ticket elimination',
+      })
+      steps.push({
+        label: 'Inputs',
+        value: `Tickets Remaining: ${fn(ticketsRemaining, 0)} | Time Saved: ${fn(timeSaved, 0)} mins | Hourly Rate: ${fc(hourlyRate)}`,
+      })
+
+      const hoursFreed = ticketsRemaining * (timeSaved / 60)
+
+      steps.push({
+        label: 'Step 1: Hours Freed',
+        value: `${fn(ticketsRemaining, 0)} × (${fn(timeSaved, 0)} ÷ 60) = ${fn(hoursFreed, 2)} hours`,
+      })
+      steps.push({
+        label: 'Step 2: Annual Benefit',
+        value: `${fn(hoursFreed, 2)} × ${fc(hourlyRate)} = ${fc(component.annualBenefit)}`,
+      })
+    }
+
+    // Service Request Management
+    else if (component.componentId === 'serviceRequestManagement') {
+      const requestsRemaining = inputs.requestsRemaining || 0
+      const timeSaved = inputs.timeSavedMinutes || 0
+
+      steps.push({
+        label: 'Formula',
+        value: `Annual Benefit = Requests Remaining × (Mins Saved ÷ 60) × Hourly Rate`,
+        description: 'Time saved per service request after automation',
+      })
+      steps.push({
+        label: 'Inputs',
+        value: `Requests Remaining: ${fn(requestsRemaining, 0)} | Time Saved: ${fn(timeSaved, 0)} mins | Hourly Rate: ${fc(hourlyRate)}`,
+      })
+
+      const hoursFreed = requestsRemaining * (timeSaved / 60)
+
+      steps.push({
+        label: 'Step 1: Hours Freed',
+        value: `${fn(requestsRemaining, 0)} × (${fn(timeSaved, 0)} ÷ 60) = ${fn(hoursFreed, 2)} hours`,
+      })
+      steps.push({
+        label: 'Step 2: Annual Benefit',
+        value: `${fn(hoursFreed, 2)} × ${fc(hourlyRate)} = ${fc(component.annualBenefit)}`,
+      })
+    }
+
+    // Problem Management
+    else if (component.componentId === 'problemManagement') {
+      const numberOfProblems = inputs.numberOfProblems || 0
+      const timeSaved = inputs.timeSavedMinutes || 0
+
+      steps.push({
+        label: 'Formula',
+        value: `Annual Benefit = Problems × (Mins Saved ÷ 60) × Hourly Rate`,
+        description: 'Time saved per problem investigation/resolution',
+      })
+      steps.push({
+        label: 'Inputs',
+        value: `Problems: ${fn(numberOfProblems, 0)} | Time Saved: ${fn(timeSaved, 0)} mins | Hourly Rate: ${fc(hourlyRate)}`,
+      })
+
+      const hoursFreed = numberOfProblems * (timeSaved / 60)
+
+      steps.push({
+        label: 'Step 1: Hours Freed',
+        value: `${fn(numberOfProblems, 0)} × (${fn(timeSaved, 0)} ÷ 60) = ${fn(hoursFreed, 2)} hours`,
+      })
+      steps.push({
+        label: 'Step 2: Annual Benefit',
+        value: `${fn(hoursFreed, 2)} × ${fc(hourlyRate)} = ${fc(component.annualBenefit)}`,
+      })
+    }
+
+    // Service Catalog Expansion
+    else if (component.componentId === 'serviceCatalogExpansion') {
+      const additionalRequests = inputs.additionalCatalogRequests || 0
+      const timeSaved = inputs.timeSavedMinutes || 0
+
+      steps.push({
+        label: 'Formula',
+        value: `Annual Benefit = Additional Catalog Requests × (Mins Saved ÷ 60) × Hourly Rate`,
+        description: 'Time saved via expanded service catalog',
+      })
+      steps.push({
+        label: 'Inputs',
+        value: `Additional Requests: ${fn(additionalRequests, 0)} | Time Saved: ${fn(timeSaved, 0)} mins | Hourly Rate: ${fc(hourlyRate)}`,
+      })
+
+      const hoursFreed = additionalRequests * (timeSaved / 60)
+
+      steps.push({
+        label: 'Step 1: Hours Freed',
+        value: `${fn(additionalRequests, 0)} × (${fn(timeSaved, 0)} ÷ 60) = ${fn(hoursFreed, 2)} hours`,
+      })
+      steps.push({
+        label: 'Step 2: Annual Benefit',
+        value: `${fn(hoursFreed, 2)} × ${fc(hourlyRate)} = ${fc(component.annualBenefit)}`,
+      })
+    }
+
+    // ESM Agent Productivity (aggregates 4 departments)
+    else if (component.componentId === 'esmAgentProductivity') {
+      const hrTickets = inputs.hrTicketsRemaining || 0
+      const facilitiesTickets = inputs.facilitiesTicketsRemaining || 0
+      const legalTickets = inputs.legalTicketsRemaining || 0
+      const financeTickets = inputs.financeTicketsRemaining || 0
+      const totalTickets = hrTickets + facilitiesTickets + legalTickets + financeTickets
+      const timeSaved = inputs.timeSavedMinutes || 0
+
+      steps.push({
+        label: 'Formula',
+        value: `Annual Benefit = Total ESM Tickets × (Mins Saved ÷ 60) × Hourly Rate`,
+        description: 'Aggregates remaining tickets from HR, Facilities, Legal, and Finance',
+      })
+      steps.push({
+        label: 'Inputs',
+        value: `HR: ${fn(hrTickets, 0)} | Facilities: ${fn(facilitiesTickets, 0)} | Legal: ${fn(legalTickets, 0)} | Finance: ${fn(financeTickets, 0)}`,
+      })
+      steps.push({
+        label: 'ESM Tickets',
+        value: `Time Saved: ${fn(timeSaved, 0)} mins | Hourly Rate: ${fc(hourlyRate)}`,
+      })
+
+      const hoursFreed = totalTickets * (timeSaved / 60)
+
+      steps.push({
+        label: 'Step 1: Total ESM Tickets',
+        value: `${fn(hrTickets, 0)} + ${fn(facilitiesTickets, 0)} + ${fn(legalTickets, 0)} + ${fn(financeTickets, 0)} = ${fn(totalTickets, 0)} tickets`,
+      })
+      steps.push({
+        label: 'Step 2: Hours Freed',
+        value: `${fn(totalTickets, 0)} × (${fn(timeSaved, 0)} ÷ 60) = ${fn(hoursFreed, 2)} hours`,
+      })
+      steps.push({
+        label: 'Step 3: Annual Benefit',
+        value: `${fn(hoursFreed, 2)} × ${fc(hourlyRate)} = ${fc(component.annualBenefit)}`,
+      })
+    }
+
+    // Change Management (special formula)
+    else if (component.componentId === 'changeManagement') {
+      const changes = inputs.numberOfChanges || 0
+      const avgPctFailed = inputs.avgPercentFailedChanges || 0
+      const pctReduction = inputs.percentReductionInFailedChanges || 0
+      const timeSaved = inputs.timeSavedMinutes || 0
+
+      steps.push({
+        label: 'Formula',
+        value: `Annual Benefit = Changes × (% Failed ÷ 100) × (% Reduction ÷ 100) × (Mins Saved ÷ 60) × Hourly Rate`,
+        description: 'Change management formula with failure rate and reduction',
+      })
+      steps.push({
+        label: 'Inputs',
+        value: `Changes: ${fn(changes, 0)} | % Failed: ${fp(avgPctFailed)} | % Reduction: ${fp(pctReduction)}`,
+      })
+      steps.push({
+        label: 'More Inputs',
+        value: `Time Saved: ${fn(timeSaved, 0)} mins | Hourly Rate: ${fc(hourlyRate)}`,
+      })
+
+      const failedChangesReduced = changes * (avgPctFailed / 100) * (pctReduction / 100)
+      const hoursFreed = failedChangesReduced * (timeSaved / 60)
+
+      steps.push({
+        label: 'Step 1: Failed Changes Reduced',
+        value: `${fn(changes, 0)} × (${fp(avgPctFailed)} ÷ 100) × (${fp(pctReduction)} ÷ 100) = ${fn(failedChangesReduced, 2)} changes`,
+      })
+      steps.push({
+        label: 'Step 2: Hours Freed',
+        value: `${fn(failedChangesReduced, 2)} × (${fn(timeSaved, 0)} ÷ 60) = ${fn(hoursFreed, 2)} hours`,
+      })
+      steps.push({
+        label: 'Step 3: Annual Benefit',
+        value: `${fn(hoursFreed, 2)} × ${fc(hourlyRate)} = ${fc(component.annualBenefit)}`,
+      })
+    }
+
+    // Time-Based Productivity (Project Management, Asset Management, CMDB)
+    else if (
+      ['projectManagement', 'assetManagement', 'cmdb'].includes(component.componentId)
+    ) {
+      const timeToday = inputs.timeSpentTodayHours || 0
+      const pctTimeSaved = inputs.percentTimeSaved || 0
+
+      steps.push({
+        label: 'Formula',
+        value: `Annual Benefit = Weekly Hours × 52 × (% Time Saved ÷ 100) × Hourly Rate`,
+        description: 'Time-based productivity formula',
+      })
+      steps.push({
+        label: 'Inputs',
+        value: `Weekly Hours: ${fn(timeToday, 2)} | % Time Saved: ${fp(pctTimeSaved)} | Hourly Rate: ${fc(hourlyRate)}`,
+      })
+
+      const annualHours = timeToday * 52
+      const hoursSaved = annualHours * (pctTimeSaved / 100)
+
+      steps.push({
+        label: 'Step 1: Annual Hours',
+        value: `${fn(timeToday, 2)} × 52 weeks = ${fn(annualHours, 2)} hours`,
+      })
+      steps.push({
+        label: 'Step 2: Hours Saved',
+        value: `${fn(annualHours, 2)} × (${fp(pctTimeSaved)} ÷ 100) = ${fn(hoursSaved, 2)} hours`,
+      })
+      steps.push({
+        label: 'Step 3: Annual Benefit',
+        value: `${fn(hoursSaved, 2)} × ${fc(hourlyRate)} = ${fc(component.annualBenefit)}`,
+      })
+    }
+
+    // License Consolidation
+    else if (component.componentId === 'licenseConsolidation') {
+      const tools = inputs.numberOfToolsEliminated || 0
+      const costPerTool = inputs.costPerToolEliminated || 0
+
+      steps.push({
+        label: 'Formula',
+        value: `Annual Benefit = Number of Tools Eliminated × Cost Per Tool`,
+        description: 'Simple cost savings from consolidating tools',
+      })
+      steps.push({
+        label: 'Inputs',
+        value: `Tools Eliminated: ${fn(tools, 0)} | Cost Per Tool: ${fc(costPerTool)}`,
+      })
+      steps.push({
+        label: 'Step 1: Annual Benefit',
+        value: `${fn(tools, 0)} × ${fc(costPerTool)} = ${fc(component.annualBenefit)}`,
+      })
+    }
+
+    // Infrastructure Savings
+    else if (component.componentId === 'infrastructureSavings') {
+      const costBefore = inputs.annualInfraCostBefore || 0
+      const costAfter = inputs.annualInfraCostAfter || 0
+      const savings = Math.max(0, costBefore - costAfter)
+
+      steps.push({
+        label: 'Formula',
+        value: `Annual Benefit = MAX(0, Cost Before - Cost After)`,
+        description: 'Infrastructure cost reduction',
+      })
+      steps.push({
+        label: 'Inputs',
+        value: `Cost Before: ${fc(costBefore)} | Cost After: ${fc(costAfter)}`,
+      })
+      steps.push({
+        label: 'Step 1: Annual Benefit',
+        value: `MAX(0, ${fc(costBefore)} - ${fc(costAfter)}) = ${fc(savings)}`,
+      })
+    }
+
+    // Vendor Spend Reduction
+    else if (component.componentId === 'vendorSpendReduction') {
+      const currentSpend = inputs.currentVendorSpend || 0
+      const pctReduction = inputs.percentReduction || 0
+      const reduction = currentSpend * (pctReduction / 100)
+
+      steps.push({
+        label: 'Formula',
+        value: `Annual Benefit = Current Spend × (% Reduction ÷ 100)`,
+        description: 'Vendor spend reduction',
+      })
+      steps.push({
+        label: 'Inputs',
+        value: `Current Spend: ${fc(currentSpend)} | % Reduction: ${fp(pctReduction)}`,
+      })
+      steps.push({
+        label: 'Step 1: Annual Benefit',
+        value: `${fc(currentSpend)} × (${fp(pctReduction)} ÷ 100) = ${fc(reduction)}`,
+      })
+    }
+
+    // ESM Shared Services
+    else if (component.componentId === 'esmSharedServices') {
+      const hrBudget = inputs.hrBudget || 0
+      const facilitiesBudget = inputs.facilitiesBudget || 0
+      const legalBudget = inputs.legalBudget || 0
+      const financeBudget = inputs.financeBudget || 0
+      const totalBudget = hrBudget + facilitiesBudget + legalBudget + financeBudget
+      const pctSaved = inputs.percentSaved || 0
+
+      steps.push({
+        label: 'Formula',
+        value: `Annual Benefit = Total ESM Budget × (% Saved ÷ 100)`,
+        description: 'Aggregates budgets from HR, Facilities, Legal, and Finance',
+      })
+      steps.push({
+        label: 'Inputs',
+        value: `HR: ${fc(hrBudget)} | Facilities: ${fc(facilitiesBudget)} | Legal: ${fc(legalBudget)} | Finance: ${fc(financeBudget)}`,
+      })
+      steps.push({
+        label: 'ESM Budget',
+        value: `% Saved: ${fp(pctSaved)}`,
+      })
+      steps.push({
+        label: 'Step 1: Total ESM Budget',
+        value: `${fc(hrBudget)} + ${fc(facilitiesBudget)} + ${fc(legalBudget)} + ${fc(financeBudget)} = ${fc(totalBudget)}`,
+      })
+      steps.push({
+        label: 'Step 2: Annual Benefit',
+        value: `${fc(totalBudget)} × (${fp(pctSaved)} ÷ 100) = ${fc(component.annualBenefit)}`,
+      })
+    }
+
+    // Freddy Copilot Savings
+    else if (component.componentId === 'freddyCopilotSavings') {
+      const interactions = inputs.numberOfInteractions || 0
+      const pctHandled = inputs.percentHandledByAI || 0
+      const timeSaved = inputs.timeSavedMinutes || 0
+
+      steps.push({
+        label: 'Formula',
+        value: `Annual Benefit = Interactions × (% Assisted ÷ 100) × (Mins Saved ÷ 60) × Hourly Rate`,
+        description: 'Freddy Copilot productivity gains',
+      })
+      steps.push({
+        label: 'Inputs',
+        value: `Interactions: ${fn(interactions, 0)} | % Assisted: ${fp(pctHandled)} | Time Saved: ${fn(timeSaved, 0)} mins | Hourly Rate: ${fc(hourlyRate)}`,
+      })
+
+      const interactionsAssisted = interactions * (pctHandled / 100)
+      const hoursFreed = interactionsAssisted * (timeSaved / 60)
+
+      steps.push({
+        label: 'Step 1: Interactions Assisted',
+        value: `${fn(interactions, 0)} × (${fp(pctHandled)} ÷ 100) = ${fn(interactionsAssisted, 2)} interactions`,
+      })
+      steps.push({
+        label: 'Step 2: Hours Freed',
+        value: `${fn(interactionsAssisted, 2)} × (${fn(timeSaved, 0)} ÷ 60) = ${fn(hoursFreed, 2)} hours`,
+      })
+      steps.push({
+        label: 'Step 3: Annual Benefit',
+        value: `${fn(hoursFreed, 2)} × ${fc(hourlyRate)} = ${fc(component.annualBenefit)}`,
+      })
+    }
+
+    // Generic fallback
+    else {
+      steps.push({
+        label: 'Annual Benefit',
+        value: fc(component.annualBenefit),
+        description: 'Detailed breakdown not available for this component',
+      })
+    }
+
+    return steps
+  }
+
+  return (
+    <div className="bg-gray-900 text-green-400 p-6 rounded-lg font-mono text-xs overflow-auto max-h-[800px]">
+      <h3 className="text-sm font-bold mb-4 text-yellow-400">
+        ═══════════════════════════════════════════════════════
+      </h3>
+      <h3 className="text-sm font-bold mb-4 text-yellow-400 text-center">
+        CALCULATION TRACE - ROI CALCULATOR DEBUG MODE
+      </h3>
+      <h3 className="text-sm font-bold mb-6 text-yellow-400">
+        ═══════════════════════════════════════════════════════
+      </h3>
+
+      {/* [0] QUICK DIAGNOSTICS - Summary at top */}
+      <div className="mb-6 bg-gray-800 p-4 rounded-lg border-2 border-yellow-600">
+        <h4 className="text-yellow-400 font-bold mb-3">[0] QUICK DIAGNOSTICS</h4>
+
+        {/* Overall Status */}
+        <div className="mb-4">
+          <div className="text-lg font-bold mb-2">
+            {sanityChecks.some(c => c.type === 'error') ? (
+              <span className="text-red-400">❌ ISSUES DETECTED - Review errors below</span>
+            ) : sanityChecks.some(c => c.type === 'warning') ? (
+              <span className="text-yellow-400">⚠️ WARNINGS - Results may need verification</span>
+            ) : (
+              <span className="text-green-400">✅ ALL CHECKS PASSED</span>
+            )}
+          </div>
+        </div>
+
+        {/* Key Metrics Summary */}
+        <div className="grid grid-cols-2 gap-4 mb-4">
+          <div className="bg-gray-900 p-3 rounded">
+            <div className="text-gray-400 text-xs">3-Year ROI</div>
+            <div className={`text-xl font-bold ${analysisResults.roi < 0 ? 'text-red-400' : analysisResults.roi > 500 ? 'text-yellow-400' : 'text-green-400'}`}>
+              {fp(analysisResults.roi)}
+            </div>
+          </div>
+          <div className="bg-gray-900 p-3 rounded">
+            <div className="text-gray-400 text-xs">Payback Period</div>
+            <div className={`text-xl font-bold ${analysisResults.paybackPeriod > 36 ? 'text-yellow-400' : 'text-green-400'}`}>
+              {fn(analysisResults.paybackPeriod, 1)} months
+            </div>
+          </div>
+          <div className="bg-gray-900 p-3 rounded">
+            <div className="text-gray-400 text-xs">Total 3-Year Benefits</div>
+            <div className={`text-xl font-bold ${analysisResults.totalBenefits3yr === 0 ? 'text-red-400' : 'text-green-400'}`}>
+              {fc(analysisResults.totalBenefits3yr)}
+            </div>
+          </div>
+          <div className="bg-gray-900 p-3 rounded">
+            <div className="text-gray-400 text-xs">Active Components</div>
+            <div className="text-xl font-bold text-cyan-400">
+              {componentResults.length} of {componentStatus.total}
+            </div>
+          </div>
+        </div>
+
+        {/* Sanity Checks */}
+        <div className="mb-3">
+          <div className="text-cyan-300 text-sm font-bold mb-1">Sanity Checks:</div>
+          <div className="ml-2 space-y-1">
+            {sanityChecks.map((check, i) => (
+              <div key={i} className="flex items-start text-xs">
+                {check.type === 'error' && <span className="text-red-400 mr-2">✗</span>}
+                {check.type === 'warning' && <span className="text-yellow-400 mr-2">⚠</span>}
+                {check.type === 'success' && <span className="text-green-400 mr-2">✓</span>}
+                {check.type === 'info' && <span className="text-blue-400 mr-2">ℹ</span>}
+                <span className={
+                  check.type === 'error' ? 'text-red-300' :
+                  check.type === 'warning' ? 'text-yellow-300' :
+                  check.type === 'success' ? 'text-green-300' : 'text-blue-300'
+                }>{check.message}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Cross-Component Validation */}
+        <div>
+          <div className="text-cyan-300 text-sm font-bold mb-1">Value Pillar Analysis:</div>
+          <div className="ml-2 space-y-1">
+            {crossValidation.map((val, i) => (
+              <div key={i} className="flex items-start text-xs">
+                {val.type === 'error' && <span className="text-red-400 mr-2">✗</span>}
+                {val.type === 'warning' && <span className="text-yellow-400 mr-2">⚠</span>}
+                {val.type === 'success' && <span className="text-green-400 mr-2">✓</span>}
+                {val.type === 'info' && <span className="text-blue-400 mr-2">ℹ</span>}
+                <span className={
+                  val.type === 'error' ? 'text-red-300' :
+                  val.type === 'warning' ? 'text-yellow-300' :
+                  val.type === 'success' ? 'text-green-300' : 'text-blue-300'
+                }>{val.message}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* [1] Configuration Overview */}
+      <div className="mb-6">
+        <h4 className="text-cyan-400 font-bold mb-2">[1] CONFIGURATION OVERVIEW</h4>
+        <div className="ml-4 space-y-1">
+          <div>
+            <span className="text-gray-400">Agent Count:</span>{' '}
+            <span className="text-white">{fn(agentData.agentCount || 0, 0)}</span>
+          </div>
+          <div>
+            <span className="text-gray-400">Individual Agent Expense:</span>{' '}
+            <span className="text-white">{fc(agentData.individualAgentExpense || 0)}</span>
+          </div>
+          <div>
+            <span className="text-gray-400">Calculated Hourly Rate:</span>{' '}
+            <span className="text-white">{fc(hourlyRate)}</span>
+            <span className="text-gray-500"> (Annual Expense ÷ 2,080 hours)</span>
+          </div>
+          <div className="mt-2">
+            <span className="text-gray-400">Selected Plan:</span>{' '}
+            <span className="text-white">{opportunity.plan || 'Not selected'}</span>
+          </div>
+          <div>
+            <span className="text-gray-400">ESM Enabled:</span>{' '}
+            <span className="text-white">{opportunity.esm ? 'Yes' : 'No'}</span>
+          </div>
+          <div>
+            <span className="text-gray-400">Freddy Enabled:</span>{' '}
+            <span className="text-white">{opportunity.freddyCoPilot ? 'Yes' : 'No'}</span>
+          </div>
+          <div>
+            <span className="text-gray-400">Benefit Realization Factors:</span>
+          </div>
+          <div className="ml-4">
+            <span className="text-gray-500">Year 1: {fp(benefitRealizationFactors.year1 * 100)}</span>
+            <span className="text-gray-500 ml-4">
+              Year 2: {fp(benefitRealizationFactors.year2 * 100)}
+            </span>
+            <span className="text-gray-500 ml-4">
+              Year 3: {fp(benefitRealizationFactors.year3 * 100)}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* [1A] INPUT DATA VALIDATION */}
+      <div className="mb-6">
+        <h4 className="text-cyan-400 font-bold mb-2">[1A] INPUT DATA VALIDATION</h4>
+        <div className="ml-4 space-y-1">
+          {validationIssues.map((issue, index) => (
+            <div key={index} className="flex items-start">
+              {issue.type === 'success' && <span className="text-green-400 mr-2">✓</span>}
+              {issue.type === 'warning' && <span className="text-yellow-400 mr-2">⚠</span>}
+              {issue.type === 'error' && <span className="text-red-400 mr-2">✗</span>}
+              <span
+                className={
+                  issue.type === 'success'
+                    ? 'text-green-300'
+                    : issue.type === 'warning'
+                    ? 'text-yellow-300'
+                    : 'text-red-300'
+                }
+              >
+                {issue.message}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* [1B] COMPONENT ENABLEMENT STATUS */}
+      <div className="mb-6">
+        <h4 className="text-cyan-400 font-bold mb-2">
+          [1B] COMPONENT ENABLEMENT STATUS ({componentStatus.enabledCount} of {componentStatus.total} enabled)
+        </h4>
+
+        {/* Enabled Components */}
+        <div className="ml-4 mb-3">
+          <div className="text-green-400 font-bold mb-1">Enabled ({componentStatus.enabledCount}):</div>
+          <div className="ml-4 space-y-1">
+            {componentStatus.enabled.map((comp) => (
+              <div key={comp.id}>
+                <span className="text-green-300">✓</span>{' '}
+                <span className="text-white">{comp.name}</span>
+                <span className="text-gray-500"> - {comp.category}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Disabled Components */}
+        {componentStatus.disabled.length > 0 && (
+          <div className="ml-4">
+            <div className="text-red-400 font-bold mb-1">
+              Disabled ({componentStatus.disabled.length}):
+            </div>
+            <div className="ml-4 space-y-1">
+              {componentStatus.disabled.map((comp) => {
+                // Determine if component is unavailable due to requirements or just not selected
+                const planOk = comp.visibleForPlans.includes(opportunity.plan || 'Growth')
+                const esmOk = !comp.requiresESM || opportunity.esm
+                const freddyOk = !comp.requiresFreddy || opportunity.freddyCoPilot
+                const isAvailable = planOk && esmOk && freddyOk
+
+                let reason = 'Available but not selected by user'
+                let reasonColor = 'text-blue-400'
+
+                if (!planOk) {
+                  reason = `Not available for ${opportunity.plan || 'Growth'} plan`
+                  reasonColor = 'text-yellow-500'
+                } else if (!esmOk) {
+                  reason = 'Requires ESM (not enabled)'
+                  reasonColor = 'text-yellow-500'
+                } else if (!freddyOk) {
+                  reason = 'Requires Freddy Co-Pilot (not enabled)'
+                  reasonColor = 'text-yellow-500'
+                }
+
+                return (
+                  <div key={comp.id}>
+                    <span className={isAvailable ? "text-blue-300" : "text-red-300"}>{isAvailable ? "○" : "✗"}</span>{' '}
+                    <span className="text-gray-400">{comp.name}</span>
+                    <span className="text-gray-600"> - {comp.category}</span>
+                    <span className={reasonColor}> ({reason})</span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* [1C] ENHANCED PRICING BREAKDOWN */}
+      <div className="mb-6">
+        <h4 className="text-cyan-400 font-bold mb-2">[1C] ENHANCED PRICING BREAKDOWN</h4>
+        <div className="ml-4 space-y-2">
+          {/* Base License */}
+          <div className="border-l-2 border-gray-700 pl-4">
+            <div className="text-yellow-400 font-bold">Base License Pricing:</div>
+            <div className="ml-4 space-y-1">
+              <div>
+                <span className="text-gray-400">Base Price per Agent:</span>{' '}
+                <span className="text-white">{fc((pricing.unitPrice || 0) - (opportunity.freddyCoPilot ? FREDDY_COPILOT_PRICE_PER_AGENT : 0))}/year</span>
+              </div>
+              {opportunity.freddyCoPilot && (
+                <div>
+                  <span className="text-gray-400">+ Freddy Co-Pilot:</span>{' '}
+                  <span className="text-white">+{fc(FREDDY_COPILOT_PRICE_PER_AGENT)}/agent/year</span>
+                  <span className="text-gray-500"> ($29/month × 12)</span>
+                </div>
+              )}
+              <div className="border-t border-gray-700 pt-1 mt-1">
+                <span className="text-green-400 font-bold">= Total Price per Agent:</span>{' '}
+                <span className="text-white font-bold">{fc(pricing.unitPrice || 0)}/year</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Annual License Calculation */}
+          <div className="border-l-2 border-gray-700 pl-4">
+            <div className="text-yellow-400 font-bold">Annual License Calculation:</div>
+            <div className="ml-4">
+              <div>
+                <span className="text-gray-400">Formula:</span>{' '}
+                <span className="text-white">{fc(pricing.unitPrice || 0)} × {fn(agentData.agentCount || 0, 0)} agents</span>
+              </div>
+              <div className="mt-1">
+                <span className="text-green-400 font-bold">= Annual License Cost:</span>{' '}
+                <span className="text-white font-bold">{fc((pricing.unitPrice || 0) * (agentData.agentCount || 0))}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Additional Costs */}
+          <div className="border-l-2 border-gray-700 pl-4">
+            <div className="text-yellow-400 font-bold">Additional Costs:</div>
+            <div className="ml-4 space-y-1">
+              <div>
+                <span className="text-gray-400">Implementation (Year 1 only):</span>{' '}
+                <span className="text-white">{fc(pricing.implementationPrice || 0)}</span>
+              </div>
+              {pricing.premiumSupportPrice && pricing.premiumSupportPrice > 0 && (
+                <div>
+                  <span className="text-gray-400">Premium Support (annual):</span>{' '}
+                  <span className="text-white">{fc(pricing.premiumSupportPrice)}</span>
+                </div>
+              )}
+              {pricing.otherCosts && pricing.otherCosts > 0 && (
+                <div>
+                  <span className="text-gray-400">Other Costs (annual):</span>{' '}
+                  <span className="text-white">{fc(pricing.otherCosts)}</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Year-by-Year Costs */}
+          <div className="border-l-2 border-green-700 pl-4 bg-gray-800 p-3 rounded">
+            <div className="text-green-400 font-bold">Year-by-Year Cost Summary:</div>
+            <div className="ml-4 space-y-1">
+              {yearlyData.map((year) => (
+                <div key={year.year}>
+                  <span className="text-gray-400">Year {year.year}:</span>{' '}
+                  <span className="text-white font-bold">{fc(year.costs)}</span>
+                  {year.year === 1 && <span className="text-gray-500"> (includes implementation)</span>}
+                </div>
+              ))}
+              <div className="border-t border-green-700 pt-1 mt-2">
+                <span className="text-green-400 font-bold">Total 3-Year Cost:</span>{' '}
+                <span className="text-white font-bold">{fc(analysisResults.totalCosts3yr)}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* [1D] MATURITY IMPACT ANALYSIS */}
+      <div className="mb-6">
+        <h4 className="text-cyan-400 font-bold mb-2">[1D] MATURITY IMPACT ANALYSIS</h4>
+        <div className="ml-4 space-y-3">
+          {componentResults
+            .filter((c) => {
+              const config = getComponentById(c.componentId)
+              return config?.supportsMaturity
+            })
+            .map((component) => {
+              const impact = getMaturityImpact(component.componentId)
+              if (!impact) return null
+
+              return (
+                <div key={component.componentId} className="border-l-2 border-purple-700 pl-4">
+                  <div className="text-yellow-400 font-bold">{impact.componentName}</div>
+                  <div className="ml-4 space-y-1">
+                    <div>
+                      <span className="text-gray-400">Maturity Level:</span>{' '}
+                      <span className="text-white">
+                        {impact.selectedLevel === 'Other'
+                          ? `Custom (${impact.customPercentage}%)`
+                          : impact.selectedLevel}
+                      </span>
+                      {' '}→{' '}
+                      <span className="text-green-300 font-bold">Annual Benefit: {fc(impact.actualBenefit)}</span>
+                    </div>
+
+                    {impact.maturityDefaults && (
+                      <div className="mt-2">
+                        <div className="text-cyan-300 text-xs">Alternative Maturity Levels:</div>
+                        <div className="ml-4 space-y-0.5 text-xs">
+                          {impact.maturityDefaults.low !== undefined && (
+                            <div className="text-gray-400">
+                              Low ({impact.maturityDefaults.low.percentEliminated ?? impact.maturityDefaults.low.timeSavedMinutes ?? '—'}{impact.maturityDefaults.low.percentEliminated !== undefined ? '%' : ' mins'}) - Would yield different benefit
+                            </div>
+                          )}
+                          {impact.maturityDefaults.medium !== undefined && (
+                            <div className="text-gray-400">
+                              Medium ({impact.maturityDefaults.medium.percentEliminated ?? impact.maturityDefaults.medium.timeSavedMinutes ?? '—'}{impact.maturityDefaults.medium.percentEliminated !== undefined ? '%' : ' mins'}) - Would yield different benefit
+                            </div>
+                          )}
+                          {impact.maturityDefaults.high !== undefined && (
+                            <div className="text-gray-400">
+                              High ({impact.maturityDefaults.high.percentEliminated ?? impact.maturityDefaults.high.timeSavedMinutes ?? '—'}{impact.maturityDefaults.high.percentEliminated !== undefined ? '%' : ' mins'}) - Would yield different benefit
+                            </div>
+                          )}
+                          {impact.otherRange && (
+                            <div className="text-gray-400">
+                              Custom range: {impact.otherRange.min}% - {impact.otherRange.max}%
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+        </div>
+      </div>
+
+      {/* [2] Component Calculations */}
+      <div className="mb-6">
+        <h4 className="text-cyan-400 font-bold mb-2">
+          [2] COMPONENT CALCULATIONS ({componentResults.length} enabled)
+        </h4>
+        <div className="space-y-4">
+          {componentResults.map((component, index) => {
+            const steps = getCalculationSteps(component)
+            const rawInputs = componentData[component.componentId]
+            const hasInputData = rawInputs && Object.keys(rawInputs.inputs || {}).length > 0
+            return (
+              <div key={component.componentId} className="ml-4 border-l-2 border-gray-700 pl-4">
+                <div className="mb-2">
+                  <span className="text-yellow-400 font-bold">
+                    [{index + 1}] {component.componentName}
+                  </span>
+                  <span className="text-gray-500 ml-2">({component.category})</span>
+                  {!hasInputData && (
+                    <span className="text-red-500 ml-2 text-xs">(⚠ Input data not found in state)</span>
+                  )}
+                </div>
+                {/* Show actual calculated benefit vs debugger recreation */}
+                {(() => {
+                  const verification = verifyComponentCalculation(component.componentId, component.annualBenefit)
+                  return (
+                    <div className="ml-4 mb-2 p-2 bg-gray-800 rounded text-xs">
+                      <div className="flex justify-between items-center">
+                        <span className="text-purple-400">Actual Calculated: </span>
+                        <span className="text-white font-bold">{fc(component.annualBenefit)}</span>
+                      </div>
+                      {verification.hasInputs && (
+                        <>
+                          <div className="flex justify-between items-center mt-1">
+                            <span className="text-cyan-400">Debugger Recalc: </span>
+                            <span className="text-white font-bold">{fc(verification.recalculatedBenefit)}</span>
+                          </div>
+                          <div className="mt-1">
+                            {verification.match ? (
+                              <span className="text-green-400">✓ Values match</span>
+                            ) : (
+                              <span className="text-red-400">✗ MISMATCH - Difference: {fc(Math.abs(component.annualBenefit - verification.recalculatedBenefit))}</span>
+                            )}
+                          </div>
+                        </>
+                      )}
+                      {!verification.hasInputs && (
+                        <div className="mt-1 text-yellow-400">⚠ Cannot verify - input data not in state</div>
+                      )}
+                    </div>
+                  )
+                })()}
+
+                {steps.map((step, stepIndex) => (
+                  <div key={stepIndex} className="ml-4 mb-1">
+                    {step.label === 'Formula' ? (
+                      <>
+                        <div className="text-yellow-300">{step.label}:</div>
+                        <div className="ml-4 text-white">{step.value}</div>
+                        {step.description && (
+                          <div className="ml-4 text-gray-500 italic">{step.description}</div>
+                        )}
+                      </>
+                    ) : step.label.startsWith('Step') ? (
+                      <div>
+                        <span className="text-green-300">{step.label}:</span>{' '}
+                        <span className="text-white">{step.value}</span>
+                      </div>
+                    ) : step.label === 'Annual Benefit' ? (
+                      <div className="mt-1">
+                        <span className="text-green-400 font-bold">→ {step.label}:</span>{' '}
+                        <span className="text-white font-bold">{step.value}</span>
+                      </div>
+                    ) : (
+                      <div>
+                        <span className="text-cyan-300">{step.label}:</span>{' '}
+                        <span className="text-white">{step.value}</span>
+                      </div>
+                    )}
+                  </div>
+                ))}
+
+                {/* 3-Year Projection */}
+                <div className="ml-4 mt-2">
+                  <div className="text-magenta-400">3-Year Projection (with realization factors):</div>
+                  <div className="ml-4">
+                    <div>
+                      <span className="text-gray-400">Year 1 ({fp(benefitRealizationFactors.year1 * 100)}):</span>{' '}
+                      <span className="text-white">{fc(component.year1)}</span>
+                    </div>
+                    <div>
+                      <span className="text-gray-400">Year 2 ({fp(benefitRealizationFactors.year2 * 100)}):</span>{' '}
+                      <span className="text-white">{fc(component.year2)}</span>
+                    </div>
+                    <div>
+                      <span className="text-gray-400">Year 3 ({fp(benefitRealizationFactors.year3 * 100)}):</span>{' '}
+                      <span className="text-white">{fc(component.year3)}</span>
+                    </div>
+                    <div className="mt-1">
+                      <span className="text-green-400 font-bold">Total 3-Year:</span>{' '}
+                      <span className="text-white font-bold">{fc(component.total)}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* [3] Cost Breakdown */}
+      <div className="mb-6">
+        <h4 className="text-cyan-400 font-bold mb-2">[3] COST BREAKDOWN</h4>
+        <div className="ml-4 space-y-2">
+          <div>
+            <span className="text-gray-400">Unit Price:</span>{' '}
+            <span className="text-white">{fc(pricing.unitPrice || 0)}</span>
+          </div>
+          <div>
+            <span className="text-gray-400">Agent Count:</span>{' '}
+            <span className="text-white">{fn(agentData.agentCount || 0, 0)}</span>
+          </div>
+          <div>
+            <span className="text-gray-400">Implementation Cost (one-time, Year 1):</span>{' '}
+            <span className="text-white">{fc(pricing.implementationPrice || 0)}</span>
+          </div>
+
+          <div className="mt-3 border-t border-gray-700 pt-2">
+            <div className="text-yellow-300">Costs by Year:</div>
+            <div className="ml-4">
+              {yearlyData.map((year) => (
+                <div key={year.year}>
+                  <span className="text-gray-400">Year {year.year}:</span>{' '}
+                  <span className="text-white">{fc(year.costs)}</span>
+                  {year.year === 1 && <span className="text-gray-500"> (includes implementation)</span>}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* [4] Yearly Cash Flow */}
+      <div className="mb-6">
+        <h4 className="text-cyan-400 font-bold mb-2">[4] YEARLY CASH FLOW</h4>
+        <div className="ml-4 space-y-3">
+          {yearlyData.map((year) => (
+            <div key={year.year} className="border-l-2 border-gray-700 pl-4">
+              <div className="text-yellow-400 font-bold">Year {year.year}</div>
+              <div className="ml-4">
+                <div>
+                  <span className="text-gray-400">Total Benefits:</span>{' '}
+                  <span className="text-green-300">{fc(year.benefits)}</span>
+                </div>
+                <div>
+                  <span className="text-gray-400">Total Costs:</span>{' '}
+                  <span className="text-red-300">{fc(year.costs)}</span>
+                </div>
+                <div className="mt-1">
+                  <span className="text-cyan-400 font-bold">Net Cash Flow:</span>{' '}
+                  <span className="text-white font-bold">{fc(year.netCashFlow)}</span>
+                  <span className="text-gray-500"> (Benefits - Costs)</span>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* [5] Final Metrics Calculations */}
+      <div className="mb-6">
+        <h4 className="text-cyan-400 font-bold mb-2">[5] FINAL METRICS CALCULATIONS</h4>
+        <div className="ml-4 space-y-3">
+          {/* ROI */}
+          <div className="border-l-2 border-gray-700 pl-4">
+            <div className="text-yellow-400 font-bold">Return on Investment (ROI)</div>
+            <div className="ml-4">
+              <div className="text-yellow-300">
+                Formula: ROI = (Total Net Cash Flow ÷ Total Costs) × 100
+              </div>
+              <div className="mt-1">
+                <span className="text-gray-400">Total Benefits (3-Year):</span>{' '}
+                <span className="text-white">{fc(analysisResults.totalBenefits3yr)}</span>
+              </div>
+              <div>
+                <span className="text-gray-400">Total Costs (3-Year):</span>{' '}
+                <span className="text-white">{fc(analysisResults.totalCosts3yr)}</span>
+              </div>
+              <div>
+                <span className="text-gray-400">Total Net Cash Flow:</span>{' '}
+                <span className="text-white">{fc(analysisResults.totalBenefits3yr - analysisResults.totalCosts3yr)}</span>
+              </div>
+              <div className="mt-1">
+                <span className="text-green-300">Calculation:</span>{' '}
+                <span className="text-white">
+                  ({fc(analysisResults.totalBenefits3yr - analysisResults.totalCosts3yr)} ÷ {fc(analysisResults.totalCosts3yr)}) × 100
+                </span>
+              </div>
+              <div className="mt-1">
+                <span className="text-green-400 font-bold text-base">
+                  → ROI = {fp(analysisResults.roi)}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Payback Period */}
+          <div className="border-l-2 border-gray-700 pl-4">
+            <div className="text-yellow-400 font-bold">Payback Period</div>
+            <div className="ml-4">
+              <div className="text-yellow-300">
+                Formula: Payback = (Initial Investment ÷ Year 1 Benefits) × 12 months
+              </div>
+              <div className="mt-1">
+                <span className="text-gray-400">Initial Investment (Year 1 Costs):</span>{' '}
+                <span className="text-white">{fc(yearlyData[0]?.costs || 0)}</span>
+              </div>
+              <div>
+                <span className="text-gray-400">Year 1 Benefits:</span>{' '}
+                <span className="text-white">{fc(yearlyData[0]?.benefits || 0)}</span>
+              </div>
+              <div className="mt-1">
+                <span className="text-green-300">Calculation:</span>{' '}
+                <span className="text-white">
+                  ({fc(yearlyData[0]?.costs || 0)} ÷ {fc(yearlyData[0]?.benefits || 0)}) × 12 = {fn(((yearlyData[0]?.costs || 0) / (yearlyData[0]?.benefits || 1)) * 12, 1)} months
+                </span>
+              </div>
+              <div className="mt-1">
+                <span className="text-green-400 font-bold text-base">
+                  → Payback Period = {fn(((yearlyData[0]?.costs || 0) / (yearlyData[0]?.benefits || 1)) * 12, 1)} months
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Summary */}
+          <div className="border-l-2 border-green-500 pl-4 bg-gray-800 p-3 rounded">
+            <div className="text-green-400 font-bold text-sm">SUMMARY</div>
+            <div className="ml-4 mt-2 space-y-1">
+              <div>
+                <span className="text-gray-400">Total 3-Year Benefits:</span>{' '}
+                <span className="text-green-300 font-bold">
+                  {fc(analysisResults.totalBenefits3yr)}
+                </span>
+              </div>
+              <div>
+                <span className="text-gray-400">Total 3-Year Costs:</span>{' '}
+                <span className="text-red-300 font-bold">{fc(analysisResults.totalCosts3yr)}</span>
+              </div>
+              <div>
+                <span className="text-gray-400">Total Net Cash Flow:</span>{' '}
+                <span className="text-cyan-300 font-bold">
+                  {fc(analysisResults.totalBenefits3yr - analysisResults.totalCosts3yr)}
+                </span>
+              </div>
+              <div className="mt-2 pt-2 border-t border-gray-600">
+                <span className="text-yellow-400 font-bold">ROI:</span>{' '}
+                <span className="text-white font-bold text-base">{fp(analysisResults.roi)}</span>
+              </div>
+              <div>
+                <span className="text-yellow-400 font-bold">Payback Period:</span>{' '}
+                <span className="text-white font-bold text-base">
+                  {fn(analysisResults.paybackPeriod, 1)} months
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* [6] Raw Data */}
+      <div className="mb-4">
+        <button
+          onClick={() => setShowRawData(!showRawData)}
+          className="text-cyan-400 font-bold hover:text-cyan-300 flex items-center gap-2"
+        >
+          <span>{showRawData ? '▼' : '▶'}</span>
+          <span>[6] RAW DATA (click to {showRawData ? 'collapse' : 'expand'})</span>
+        </button>
+        {showRawData && (
+          <div className="ml-4 mt-2">
+            <pre className="text-xs overflow-auto">
+              {JSON.stringify({ state, calculatedResults }, null, 2)}
+            </pre>
+          </div>
+        )}
+      </div>
+
+      <div className="text-center text-gray-500 text-xs mt-6 pt-4 border-t border-gray-700">
+        End of Calculation Trace
+      </div>
+    </div>
+  )
+}
